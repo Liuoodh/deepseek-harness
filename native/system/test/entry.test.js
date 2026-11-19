@@ -42,6 +42,20 @@ const resolvedViaSeam = launcherPath((specifier) => {
 });
 assert.equal(resolvedViaSeam, path.join('/fake-install', platformPackage, 'bin', LAUNCHER_BIN));
 
+if (process.platform === 'linux') {
+  const archive = '/opt/DSH Linux/resources/app.asar';
+  const manifest = (specifier) => path.join(archive, 'dsh/node_modules', specifier);
+  const relativeBinary = path.join('dsh/node_modules', platformPackage, 'bin', LAUNCHER_BIN);
+  assert.equal(launcherPath(manifest), path.join(archive, relativeBinary));
+  Object.defineProperty(process.versions, 'electron', { configurable: true, value: 'test' });
+  try {
+    assert.equal(launcherPath(manifest), path.join(`${archive}.unpacked`, relativeBinary));
+    assert.equal(launcherPath(() => '/ordinary-install/package.json'), '/ordinary-install/bin/landlock-run');
+  } finally {
+    Reflect.deleteProperty(process.versions, 'electron');
+  }
+}
+
 // --- launcherPath: unresolvable package falls back to an absolute, package-boundary path ---
 const fallback = launcherPath(() => {
   throw new Error('not installed');

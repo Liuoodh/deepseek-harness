@@ -17,17 +17,27 @@ async function mockPlatform() {
   let origin = ''
   let init: Record<string, string> = {}
   let failExchange = false
+  const rejectedRequests: string[] = []
   const server = createServer((req, res) => {
     // The real Host composition identifies every Platform request with the five client headers.
     const expected = {
-      'x-client-bundle-id': '', 'x-client-platform': process.platform === 'win32' ? 'desktop-win' : 'desktop-mac',
+      'x-client-bundle-id': '',
+      'x-client-platform': process.platform === 'win32' ? 'desktop-win' : process.platform === 'darwin' ? 'desktop-mac' : 'web',
       'x-client-version': '1.2.3', 'x-client-locale': 'en_US',
       'x-client-timezone-offset': String(-new Date().getTimezoneOffset() * 60),
     }
     for (const [name, value] of Object.entries(expected)) {
-      if (req.headers[name] !== value) { res.writeHead(400).end(); return }
+      if (req.headers[name] !== value) {
+        rejectedRequests.push(`expected ${name}=${value}, received ${String(req.headers[name])}`)
+        res.writeHead(400).end()
+        return
+      }
     }
-    if (req.headers.cookie !== 'test_gate=synthetic') { res.writeHead(403).end(); return }
+    if (req.headers.cookie !== 'test_gate=synthetic') {
+      rejectedRequests.push('missing synthetic deployment cookie')
+      res.writeHead(403).end()
+      return
+    }
     if (req.url === '/auth-api/v0/users/logout' && req.method === 'POST') {
       if (req.headers['x-dsh-auth-token'] !== 'dsh_mock_composition_test') { res.writeHead(401).end(); return }
       res.writeHead(503).end()
@@ -66,6 +76,7 @@ async function mockPlatform() {
   origin = `http://127.0.0.1:${String(address.port)}`
   return {
     origin,
+    rejectedRequests,
     failExchange: (value: boolean) => { failExchange = value },
     callback: () => `${init.redirect_uri}?code=test&state=${init.state}`,
     close: () => new Promise<void>((resolve) => { server.close(() => { resolve() }); server.closeAllConnections() }),
@@ -82,7 +93,10 @@ describe.skipIf(!existsSync(builtHost))('built Desktop welcome flow', () => {
       const nodeBin = join(root, 'runtime/primary-runtime/dependencies/node/bin')
       mkdirSync(nodeBin, { recursive: true })
       cpSync(process.execPath, join(nodeBin, process.platform === 'win32' ? 'node.exe' : 'node'))
-      writeFileSync(join(paths.profile, 'cordis.patch.yml'), `- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0\n- id: deepseek-account\n  config:\n${process.platform === 'linux' ? '    desktopPlatform: darwin\n' : ''}    platformOrigin: ${platform.origin}\n    harnessOrigin: ${platform.origin}\n    allowLoopbackHttp: true\n    requestHeaders:\n      Cookie: test_gate=synthetic\n`)
+      // A profile patch replaces the config; preserve the native identity on macOS and Windows.
+      const identity = process.platform === 'darwin' || process.platform === 'win32'
+        ? `    desktopPlatform: ${process.platform}\n` : ''
+      writeFileSync(join(paths.profile, 'cordis.patch.yml'), `- id: webserver\n  config:\n    host: 127.0.0.1\n    port: 0\n- id: deepseek-account\n  config:\n    platformOrigin: ${platform.origin}\n    harnessOrigin: ${platform.origin}\n    allowLoopbackHttp: true\n${identity}    requestHeaders:\n      Cookie: test_gate=synthetic\n`)
       let backend: DesktopWelcomeBackend
       let hostOrigin = ''
       const restart = async (): Promise<void> => {
@@ -110,7 +124,10 @@ describe.skipIf(!existsSync(builtHost))('built Desktop welcome flow', () => {
       await restart()
       expect(await status()).toMatchObject({ hasApiKey: true })
       await backend!.account.start(desktopClientMetadata('en'))
-      await expect.poll(async () => (await backend!.account.state()).attempt?.phase).toBe('waiting-browser')
+      await expect.poll(async () => ({
+        phase: (await backend!.account.state()).attempt?.phase,
+        rejectedRequests: platform.rejectedRequests,
+      })).toEqual({ phase: 'waiting-browser', rejectedRequests: [] })
       expect(new URL(platform.callback()).origin).toBe(hostOrigin)
       platform.failExchange(true)
       const failed = await fetch(platform.callback(), { redirect: 'manual' })
@@ -119,7 +136,10 @@ describe.skipIf(!existsSync(builtHost))('built Desktop welcome flow', () => {
       expect(await status()).toMatchObject({ hasApiKey: true, loggedIn: false })
       platform.failExchange(false)
       await backend!.account.start(desktopClientMetadata('en'))
-      await expect.poll(async () => (await backend!.account.state()).attempt?.phase).toBe('waiting-browser')
+      await expect.poll(async () => ({
+        phase: (await backend!.account.state()).attempt?.phase,
+        rejectedRequests: platform.rejectedRequests,
+      })).toEqual({ phase: 'waiting-browser', rejectedRequests: [] })
       const response = await fetch(platform.callback(), { redirect: 'manual' })
       expect(response.status).toBe(302)
       expect(response.headers.get('location')).toBe(`${platform.origin}/dsh/authorized?result=test&locale=zh_CN&login_source=desktop`)
@@ -130,7 +150,10 @@ describe.skipIf(!existsSync(builtHost))('built Desktop welcome flow', () => {
       await backend!.account.signOut(desktopClientMetadata('en'))
       expect(await status()).toMatchObject({ hasApiKey: true, loggedIn: false })
       await backend!.account.start(desktopClientMetadata('en'))
-      await expect.poll(async () => (await backend!.account.state()).attempt?.phase).toBe('waiting-browser')
+      await expect.poll(async () => ({
+        phase: (await backend!.account.state()).attempt?.phase,
+        rejectedRequests: platform.rejectedRequests,
+      })).toEqual({ phase: 'waiting-browser', rejectedRequests: [] })
       const waiting = await backend!.account.state()
       const late = platform.callback()
       await backend!.account.cancel(waiting.attempt!.id)

@@ -25,8 +25,29 @@ describe('desktop package target', () => {
     expect(resolveDesktopPackageTarget('mac-x64', 'darwin', 'arm64').arch).toBe('x64')
   })
 
+  it.each(['x64', 'arm64'])('selects the native Linux %s target and disables publishing', (arch) => {
+    const target = resolveDesktopPackageTarget(`linux-${arch}`, 'linux', arch)
+    expect(target).toMatchObject({ platform: 'linux', arch, builderArch: `--${arch}` })
+    expect(desktopElectronBuilderArguments(target, false)).toEqual([
+      'exec', 'electron-builder', '--config', 'electron-builder.config.mjs', '--linux', `--${arch}`, '--publish', 'never',
+    ])
+  })
+
+  it('requires an exact requested version for fork-local Linux artifacts', () => {
+    expect(parseDesktopPackageInvocation(['--check'], 'linux', 'arm64')).toMatchObject({
+      target: { name: 'linux-arm64' }, unsigned: true, check: true,
+    })
+    expect(parseDesktopPackageInvocation(['linux-x64', '--build-version', '0.2.2-rc.4'], 'linux', 'x64'))
+      .toMatchObject({ unsigned: true, requestedBuildVersion: '0.2.2-rc.4' })
+    expect(() => parseDesktopPackageInvocation([], 'linux', 'x64')).toThrow(/explicit --build-version/u)
+    expect(() => parseDesktopPackageInvocation(['--build-version', 'auto'], 'linux', 'x64')).toThrow(/auto is not supported/u)
+    expect(() => parseDesktopPackageInvocation(['--skip-notarization'], 'linux', 'arm64')).toThrow(/signed macOS/u)
+  })
+
   it('rejects unsupported targets and hosts before building', () => {
-    expect(() => resolveDesktopPackageTarget('linux-x64', 'linux', 'x64')).toThrow(/unsupported target/u)
+    expect(() => resolveDesktopPackageTarget('linux-ia32', 'linux', 'x64')).toThrow(/unsupported target/u)
+    expect(() => resolveDesktopPackageTarget('linux-x64', 'linux', 'arm64')).toThrow(/Linux x64 build host/u)
+    expect(() => resolveDesktopPackageTarget('linux-arm64', 'darwin', 'arm64')).toThrow(/Linux arm64 build host/u)
     expect(() => resolveDesktopPackageTarget('win-x64', 'darwin', 'arm64')).toThrow(/Windows x64/u)
     expect(() => resolveDesktopPackageTarget('mac-arm64', 'darwin', 'x64')).toThrow(/Apple Silicon/u)
     expect(() => resolveDesktopPackageTarget('mac-arm64', 'linux', 'arm64')).toThrow(/macOS/u)

@@ -1,0 +1,333 @@
+name: Desktop · Linux
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      build_version:
+        description: Exact Desktop build version approved for this run (not auto)
+        type: string
+        required: true
+      confirm_version:
+        description: Confirm the entered version for unsigned Linux packages on both architectures
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  desktop-linux:
+    name: Desktop Linux (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+            deb_arch: amd64
+            rpm_arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            deb_arch: arm64
+            rpm_arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      DSH_TELEMETRY_DISABLED: '1'
+      NO_COLOR: '1'
+    steps:
+      - name: Require manual version confirmation
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          CONFIRMED: ${{ inputs.confirm_version }}
+        run: |
+          if [[ "$CONFIRMED" != true ]]; then
+            echo '::error::Confirm the exact build version before requesting Linux packages.'
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v5.0.0
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+
+      - name: Assert native runner architecture
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          node -e 'if (process.platform !== "linux" || process.arch !== process.env.TARGET_ARCH) throw Error("Expected native Linux " + process.env.TARGET_ARCH + ", got " + process.platform + "/" + process.arch)'
+
+      - name: Install native build and Electron smoke prerequisites
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends \
+            build-essential binutils musl-tools pkg-config python3 \
+            dbus-x11 libasound2t64 libgbm1 libgtk-3-0t64 libnss3 libxss1 libxtst6 xauth xvfb
+
+      - name: Install dependencies from frozen lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate exact build version against product manifests
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          BUILD_VERSION: ${{ inputs.build_version }}
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs'
+          import { validateDesktopBuildVersion } from './apps/desktop/scripts/desktop-build-version.mjs'
+          const version = process.env.BUILD_VERSION
+          if (!version || !/^[0-9][0-9A-Za-z.-]*$/.test(version) || version.trim() !== version) {
+            throw new Error('Supply one exact SemVer build version, not auto or an empty value.')
+          }
+          const manifests = ['package.json', 'apps/cli/package.json', 'apps/desktop/package.json', 'apps/desktop-host/package.json']
+          const versions = manifests.map(file => JSON.parse(readFileSync(file, 'utf8')).version)
+          if (typeof versions[0] !== 'string' || versions.some(value => value !== versions[0])) {
+            throw new Error('Product version differs across the root, CLI, Desktop, and Desktop Host manifests.')
+          }
+          if (validateDesktopBuildVersion(version, versions[0]) !== version) {
+            throw new Error('Build version must match the exact canonical version the package records.')
+          }
+          console.log(`Confirmed build ${version} for product ${versions[0]}`)
+          JS
+
+      # build:check consumes emitted declarations, so do not run these concurrently.
+      - name: Build repository artifacts
+        run: pnpm run build:artifacts
+
+      - name: Check aggregate types against built artifacts
+        run: pnpm run build:check
+
+      - name: Run focused Desktop tests
+        run: |
+          pnpm exec vitest run \
+            apps/desktop/tests/desktop-build-commit.spec.ts \
+            apps/desktop/tests/desktop-build-paths.spec.ts \
+            apps/desktop/tests/desktop-build-version.spec.ts \
+            apps/desktop/tests/desktop-package-environment.spec.ts \
+            apps/desktop/tests/linux-builder-config.spec.ts \
+            apps/desktop/tests/main-startup.spec.ts \
+            apps/desktop/tests/package-target.spec.ts \
+            apps/desktop/tests/package-target-stages.spec.ts \
+            apps/desktop/tests/platform-view.spec.ts \
+            packages/account/deepseek-account/tests/account.spec.ts
+          node --test apps/desktop/tests/installed-linux-runtime.test.mjs apps/desktop/tests/linux-payload-report.test.mjs apps/desktop/tests/linux-upstream-check.test.mjs
+          bash -n apps/desktop/scripts/smoke-installed-linux-gui.sh
+
+      - name: Check plugin compatibility and skill discovery
+        run: |
+          pnpm exec vitest run \
+            packages/boot/app-boot/tests/plugin-compatibility.spec.ts \
+            packages/boot/app-boot/tests/profile-plugins.spec.ts \
+            packages/skill/skill-filesystem/tests/skill-filesystem.spec.ts \
+            packages/skill/tool-skill/tests/tool-skill.spec.ts
+
+      - name: Build and exercise native DSH Landlock confinement
+        run: |
+          pnpm --dir native/system run build:ts
+          pnpm --dir native/system run build:native
+          node native/system/test/entry.test.js
+          pnpm exec vitest run --config vitest.e2e.config.ts \
+            packages/sandbox/sandbox-local/tests/landlock.e2e.ts \
+            packages/shell/bash-sandbox/tests/landlock.e2e.ts | tee "$RUNNER_TEMP/dsh-landlock.log"
+          # Existing suites can self-skip on an unusable kernel. A skip is not a pass on these native runners.
+          grep -E 'Test Files[[:space:]]+2 passed \(2\)' "$RUNNER_TEMP/dsh-landlock.log"
+          printf '%s\n' '- DSH Landlock: both real confinement suites passed.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Exercise the built Desktop Host account flow without credentials
+        run: |
+          test -s apps/desktop-host/lib/index.js
+          pnpm exec vitest run --config vitest.e2e.config.ts apps/desktop/tests/welcome-flow.e2e.ts
+
+      - name: Exercise sandboxed Electron on Xvfb when supported by the runner
+        run: |
+          smoke=$(mktemp -d "$RUNNER_TEMP/dsh-electron.XXXXXX")
+          trap 'rm -rf -- "$smoke"' EXIT
+          skip_smoke() {
+            printf '::warning::Electron UI smoke skipped: %s\n' "$1"
+            printf '%s\n' "- **Electron UI smoke skipped:** $1" >> "$GITHUB_STEP_SUMMARY"
+          }
+          if [[ ! -f apps/desktop/tests/platform-storage.e2e.ts || ! -f apps/desktop/tests/fixtures/platform-storage-smoke.mjs ]]; then
+            skip_smoke 'the Desktop storage harness is unavailable on this revision.'
+            exit 0
+          fi
+          test -s apps/desktop/lib/types/platform-view.js
+          electron=$(node -p 'require("./apps/desktop/node_modules/electron")')
+          test -x "$electron"
+          unset ELECTRON_RUN_AS_NODE ELECTRON_DISABLE_SANDBOX
+
+          # Check the Chromium sandbox can launch without changing app or host policy.
+          cat > "$smoke/preload.cjs" <<'JS'
+          require('electron').contextBridge.exposeInMainWorld('isSandboxed', process.sandboxed === true)
+          JS
+          cat > "$smoke/main.cjs" <<'JS'
+          const { app, BrowserWindow } = require('electron')
+          const { join } = require('node:path')
+          app.whenReady().then(async () => {
+            const window = new BrowserWindow({ show: false, webPreferences: {
+              preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false,
+            } })
+            await window.loadURL('data:text/html,<title>sandbox-check</title>')
+            if (await window.webContents.executeJavaScript('globalThis.isSandboxed') !== true) {
+              throw new Error('Electron renderer did not report an active sandbox')
+            }
+            app.exit(0)
+          }).catch(error => { console.error(error); app.exit(1) })
+          JS
+          status=0
+          timeout --kill-after=5s 45s xvfb-run -a "$electron" --user-data-dir="$smoke/profile" "$smoke/main.cjs" \
+            > "$smoke/launch.log" 2>&1 || status=$?
+          if (( status != 0 )); then
+            cat "$smoke/launch.log"
+            if grep -Eqi 'No usable sandbox|SUID sandbox helper binary was found, but is not configured correctly|Failed to move to new namespace: .*Operation not permitted' "$smoke/launch.log"; then
+              skip_smoke 'unchanged runner policy could not start the Chromium sandbox.'
+              exit 0
+            fi
+            exit "$status"
+          fi
+          xvfb-run -a pnpm exec vitest run --config vitest.e2e.config.ts \
+            apps/desktop/tests/platform-storage.e2e.ts | tee "$smoke/test.log"
+          grep -E 'Test Files[[:space:]]+1 passed \(1\)' "$smoke/test.log"
+          printf '%s\n' '- Electron UI: sandboxed renderer and Desktop storage smoke passed.' >> "$GITHUB_STEP_SUMMARY"
+
+      # Neither PRs nor this dispatch publish to a release or an updater feed.
+      - name: Install packaging and installed GUI verification tools
+        if: github.event_name == 'workflow_dispatch'
+        run: sudo apt-get install -yq --no-install-recommends cpio dpkg-dev fakeroot rpm rpm2cpio xz-utils xdotool
+
+      - name: Package approved unsigned Linux build
+        if: github.event_name == 'workflow_dispatch'
+        id: package
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+          BUILD_VERSION: ${{ inputs.build_version }}
+        # Locked app-builder-lib 26.17.0 uses checksum-pinned FPM for native x64 and arm64.
+        run: pnpm --dir apps/desktop run "package:linux:$TARGET_ARCH" --build-version "$BUILD_VERSION"
+
+      - name: Verify package formats, architectures and versions
+        if: steps.package.outcome == 'success'
+        id: verify-packages
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+          DEB_ARCH: ${{ matrix.deb_arch }}
+          RPM_ARCH: ${{ matrix.rpm_arch }}
+          BUILD_VERSION: ${{ inputs.build_version }}
+        run: |
+          directory="apps/desktop/.desktop-build/targets/linux-$TARGET_ARCH/unsigned-artifacts"
+          shopt -s nullglob
+          debs=("$directory"/*.deb)
+          rpms=("$directory"/*.rpm)
+          ((${#debs[@]} == 1 && ${#rpms[@]} == 1)) || { echo '::error::Expected one DEB and one RPM.'; exit 1; }
+          test "$(dpkg-deb --field "${debs[0]}" Architecture)" = "$DEB_ARCH"
+          test "$(rpm -qp --queryformat '%{ARCH}' "${rpms[0]}")" = "$RPM_ARCH"
+          test "$(dpkg-deb --field "${debs[0]}" Package)" = dsh-linux
+          test "$(rpm -qp --queryformat '%{NAME}' "${rpms[0]}")" = dsh-linux
+          # electron-builder encodes prerelease hyphens as tildes in package headers.
+          native_version=${BUILD_VERSION//-/\~}
+          test "$(dpkg-deb --field "${debs[0]}" Version)" = "$native_version"
+          test "$(rpm -qp --queryformat '%{VERSION}' "${rpms[0]}")" = "$native_version"
+          # Check installed-package requirements even when the CI image already has these libraries.
+          deb_depends=$(dpkg-deb --field "${debs[0]}" Depends | tr ',' '\n' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')
+          for dependency in 'libasound2t64 | libasound2' libgbm1 'libcups2t64 | libcups2' libudev1 libnspr4; do
+            grep -Fx -- "$dependency" <<< "$deb_depends"
+          done
+          rpm_requires=$(rpm -qp --requires "${rpms[0]}")
+          for dependency in alsa-lib mesa-libgbm cups-libs systemd-libs nspr; do
+            grep -Fx -- "$dependency" <<< "$rpm_requires"
+          done
+          cp -- "$(dirname "$directory")/dsh/desktop-runtime.json" "$directory/desktop-runtime.json"
+          (cd -- "$directory" && sha256sum -- ./*.deb ./*.rpm ./desktop-runtime.json > SHA256SUMS)
+          printf '%s\n' "- Unsigned DEB ($DEB_ARCH) and RPM ($RPM_ARCH) headers verified for $native_version; SHA-256 recorded." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke-test the installed Ubuntu DEB and check RPM contents
+        if: steps.verify-packages.outcome == 'success'
+        id: deb-smoke
+        env:
+          DSH_DESKTOP_TARGET_PLATFORM: linux
+          DSH_DESKTOP_TARGET_ARCH: ${{ matrix.arch }}
+          BUILD_VERSION: ${{ inputs.build_version }}
+        run: |
+          directory="apps/desktop/.desktop-build/targets/linux-$DSH_DESKTOP_TARGET_ARCH/unsigned-artifacts"
+          debs=("$directory"/*.deb)
+          rpms=("$directory"/*.rpm)
+          app='/opt/DSH Linux'
+          desktop='/usr/share/applications/io.github.liuoodh.dshlinux.desktop'
+          test ! -e "$app"
+          sudo apt-get install -y "$(realpath "${debs[0]}")"
+          test "$(dpkg-query -W -f='${Version}' dsh-linux)" = "${BUILD_VERSION//-/\~}"
+          test "$(readlink -f /usr/bin/dsh-linux)" = "$app/dsh-linux"
+          test -x "$app/chrome-sandbox"
+          test -f "$desktop"
+          grep -Eq '^MimeType=.*x-scheme-handler/dsh;' "$desktop"
+          test ! -e "$app/resources/app-update.yml"
+          node apps/desktop/scripts/report-linux-payload.mjs --app-root "$app" --arch "$DSH_DESKTOP_TARGET_ARCH" > "$directory/ELF-ABI.json"
+          # Extract only the RPM built in this job; do not run its scriptlets on Ubuntu.
+          extracted=$(mktemp -d "$RUNNER_TEMP/dsh-rpm.XXXXXX")
+          trap 'rm -rf -- "$extracted"' EXIT
+          rpm2cpio "${rpms[0]}" | (cd "$extracted" && cpio -idm --quiet --no-absolute-filenames --no-preserve-owner)
+          rpm_app="$extracted$app"
+          launcher="resources/app.asar.unpacked/dsh/node_modules/@deepseek-ai/node-addon-system-linux-$DSH_DESKTOP_TARGET_ARCH/bin/landlock-run"
+          for executable in dsh-linux chrome-sandbox resources/runtime/primary-runtime/dependencies/node/bin/node "$launcher"; do
+            test -f "$rpm_app/$executable" && test -x "$rpm_app/$executable" || {
+              printf 'RPM payload is missing executable %s\n' "$executable" >&2
+              exit 1
+            }
+          done
+          cmp -- "$app/resources/app.asar" "$rpm_app/resources/app.asar"
+          cmp -- "$app/dsh-linux" "$rpm_app/dsh-linux"
+          cmp -- "$app/$launcher" "$rpm_app/$launcher"
+          test ! -e "$rpm_app/resources/app-update.yml"
+          grep -Eq '^MimeType=.*x-scheme-handler/dsh;' "$extracted$desktop"
+          node apps/desktop/scripts/report-linux-payload.mjs --app-root "$rpm_app" --arch "$DSH_DESKTOP_TARGET_ARCH" > "$extracted/ELF-ABI.json"
+          diff -u -- "$directory/ELF-ABI.json" "$extracted/ELF-ABI.json"
+          printf '%s\n' '- RPM archive: core payload bytes, ELF report and desktop protocol match the Ubuntu DEB checks; RPM scriptlets were not run.' >> "$GITHUB_STEP_SUMMARY"
+          pnpm --dir apps/desktop exec tsx scripts/smoke-packaged-runtime.ts \
+            --installed-linux-root "$app" --expected-runtime-dir "$(realpath "$directory")" --expected-build-version "$BUILD_VERSION"
+          xvfb-run -a dbus-run-session -- bash apps/desktop/scripts/smoke-installed-linux-gui.sh /usr/bin/dsh-linux
+          sudo apt-get purge -y dsh-linux
+          test ! -e "$app/dsh-linux"
+          test ! -e "$desktop"
+          test ! -L /usr/bin/dsh-linux
+          printf '%s\n' '- Ubuntu DEB installed, packaged Host/native smoke and first-run X11 window passed as non-root, and package was removed.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attach unsigned packages to the workflow run
+        if: steps.deb-smoke.outcome == 'success'
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: desktop-linux-${{ matrix.arch }}-unsigned
+          path: |
+            apps/desktop/.desktop-build/targets/linux-${{ matrix.arch }}/unsigned-artifacts/*.deb
+            apps/desktop/.desktop-build/targets/linux-${{ matrix.arch }}/unsigned-artifacts/*.rpm
+            apps/desktop/.desktop-build/targets/linux-${{ matrix.arch }}/unsigned-artifacts/SHA256SUMS
+            apps/desktop/.desktop-build/targets/linux-${{ matrix.arch }}/unsigned-artifacts/ELF-ABI.json
+            apps/desktop/.desktop-build/targets/linux-${{ matrix.arch }}/unsigned-artifacts/desktop-runtime.json
+          # Only the explicitly listed files below the hidden .desktop-build directory.
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Attach packaging reports even on packaging failure
+        if: always() && (steps.package.outcome == 'success' || steps.package.outcome == 'failure')
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: desktop-linux-${{ matrix.arch }}-packaging-reports
+          path: |
+            apps/desktop/.desktop-build/packaging-runs/*/run.json
+            apps/desktop/.desktop-build/packaging-runs/*/events.jsonl
+            apps/desktop/.desktop-build/packaging-runs/*/result.json
+            apps/desktop/.desktop-build/packaging-runs/*/fatal.json
+            apps/desktop/.desktop-build/packaging-runs/*/stdout.log
+            apps/desktop/.desktop-build/packaging-runs/*/stderr.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

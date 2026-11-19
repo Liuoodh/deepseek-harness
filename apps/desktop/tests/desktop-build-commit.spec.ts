@@ -73,6 +73,14 @@ describe('desktop toolchain preflight', () => {
     expect(failures.find(failure => failure.tool === 'vswhere')?.detail).toContain('ProgramFiles(x86)')
   })
 
+  it.runIf(process.platform === 'linux')('reports missing Linux compiler and installer tools', async () => {
+    const empty = await mkdtemp(join(tmpdir(), 'dsh-no-linux-tools-'))
+    directories.push(empty)
+    const failures = await probeDesktopToolchain('linux', { PATH: empty })
+    expect(failures.map(failure => failure.tool)).toEqual(['cc', 'musl-gcc', 'npm', 'rpmbuild', 'xz'])
+    expect(failures.every(failure => failure.detail.includes('ENOENT'))).toBe(true)
+  })
+
   it('writes nothing into the working directory while probing', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-probe-cwd-'))
     directories.push(directory)

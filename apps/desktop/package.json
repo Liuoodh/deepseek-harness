@@ -36,6 +36,8 @@
     "package:mac:x64": "tsx scripts/package-target.ts mac-x64",
     "package:mac:x64:unsigned": "tsx scripts/package-target.ts mac-x64 --unsigned",
     "package:mac:x64:dir": "tsx scripts/package-target.ts mac-x64 --dir",
+    "package:linux:x64": "tsx scripts/package-target.ts linux-x64",
+    "package:linux:arm64": "tsx scripts/package-target.ts linux-arm64",
     "package:win:x64": "tsx scripts/package-target.ts win-x64",
     "package:win:x64:unsigned": "tsx scripts/package-target.ts win-x64 --unsigned",
     "package:win:x64:dir": "tsx scripts/package-target.ts win-x64 --dir",

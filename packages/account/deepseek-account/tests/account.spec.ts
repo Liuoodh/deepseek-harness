@@ -34,7 +34,7 @@ async function fixture(
   inferenceOrigin = 'https://api.deepseek.com',
   beforeAccount?: (ctx: Context, origin: string) => Promise<void>,
   embeddedPageDist = '',
-  desktopPlatform: 'darwin' | 'win32' | null = null,
+  desktopPlatform?: 'darwin' | 'win32' | null,
   balanceTimeoutMs = 30_000,
 ) {
   const home = await mkdtemp(join(tmpdir(), 'dsh-account-'))
@@ -159,7 +159,7 @@ async function fixture(
   await authorization
   await beforeAccount?.(ctx, origin)
   const accountConfig = {
-    platformOrigin: origin, inferenceOrigin, embeddedPageDist, desktopPlatform,
+    platformOrigin: origin, inferenceOrigin, embeddedPageDist, ...(desktopPlatform === undefined ? {} : { desktopPlatform }),
     allowLoopbackHttp: true, requestHeaders, accountRequestHeaders,
     rewriteBrowserOrigin, logoutRetryDelayMs: 1, balanceTimeoutMs,
   }
@@ -1076,7 +1076,7 @@ it('carries the configured embedded frontend selector in the private Platform se
 })
 
 it.each([
-  ['darwin', 'desktop-mac'], ['win32', 'desktop-win'], [null, 'web'],
+  ['darwin', 'desktop-mac'], ['win32', 'desktop-win'], [null, 'web'], [undefined, 'web'],
 ] as const)('identifies %s Host API requests over deployment header overrides', async (desktopPlatform, expected) => {
   // Deployment configuration may name the client identity headers, but the caller's metadata always
   // wins for every Host API request. The embedded session keeps the deployment values, and its

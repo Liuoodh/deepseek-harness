@@ -3,7 +3,7 @@ import { appendFile, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { desktopTargetBuildPaths, resolveDesktopBuildTarget } from './desktop-build-paths.mjs'
 import { desktopReleasesRoot } from '@deepseek-ai/dsh-desktop-publisher/desktop-releases-root.ts'
-import { desktopBuildRecordFilename, desktopUpdateMetadataFilename, resolveDesktopUpdateChannel } from '@deepseek-ai/dsh-desktop-publisher/desktop-auto-update-environment.mjs'
+import { desktopBuildRecordFilename, desktopUpdateMetadataFilename, resolveDesktopUpdateChannel, type DesktopAutoUpdateTarget } from '@deepseek-ai/dsh-desktop-publisher/desktop-auto-update-environment.mjs'
 import { loadDesktopPackageEnvironment } from './desktop-package-environment.mjs'
 import { retainDesktopRelease, type DesktopRetainedSource } from '@deepseek-ai/dsh-desktop-publisher/desktop-release-store.ts'
 import { validateDesktopBuildVersion } from './desktop-build-version.mjs'
@@ -18,13 +18,21 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
   return value
 }
 
+function resolveRetentionTarget(env: NodeJS.ProcessEnv): DesktopAutoUpdateTarget {
+  const target = resolveDesktopBuildTarget(env)
+  if (target === 'linux-x64' || target === 'linux-arm64') {
+    throw new Error('desktop retention: Linux packages do not enter the official release store')
+  }
+  return target
+}
+
 /**
  * Resolve the original machine's unique label before expensive packaging work.
  * @param env Machine identity, target and administrator-owned runner mapping.
  * @returns The exact label used by the later GitHub archival job.
  */
 export function resolveDesktopRetentionRunner(env: NodeJS.ProcessEnv): string {
-  const target = resolveDesktopBuildTarget(env)
+  const target = resolveRetentionTarget(env)
   const routes = desktopPublishRunnersSchema.parse(JSON.parse(required(env, 'DESKTOP_PUBLISH_RUNNERS')))
   const route = routes[required(env, 'RUNNER_NAME')]
   if (!route || !route.target.includes(target)
@@ -41,7 +49,7 @@ export function resolveDesktopRetentionRunner(env: NodeJS.ProcessEnv): string {
  * @returns Retained directory, including explicitly qualified debugging packages.
  */
 export async function retainDesktopCi(env: NodeJS.ProcessEnv, appRoot = resolve(import.meta.dirname, '..')): Promise<string> {
-  const target = resolveDesktopBuildTarget(env)
+  const target = resolveRetentionTarget(env)
   const runnerLabel = resolveDesktopRetentionRunner(env)
   const windows = target === 'win-x64'
   const platform = windows ? 'win32' : 'darwin'

@@ -12,7 +12,7 @@ import { validateMacOSSignatureCacheDirectory } from './macos-signature-cache-di
 import { resolveMacOSPackageSettings } from './macos-package-settings.mjs'
 import { resolveWindowsSignatureCacheDirectory } from './windows-signature-cache-directory.mjs'
 import { resolveWindowsPackageSettings } from './windows-package-settings.mjs'
-import { resolveDesktopTargetBuildPaths } from './desktop-build-paths.mjs'
+import { LINUX_DESKTOP_APP_ID, resolveDesktopTargetBuildPaths } from './desktop-build-paths.mjs'
 
 const APP_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const SHARED_SETTING = /^(?:DSH_DESKTOP_(?:APP_ID|AUTO_UPDATE_ENV|NPM_REGISTRY|MANDATORY_UPDATE_(?:CONFIG|(?:TEST|PROD)_ORIGIN))|DOWNLOAD_TEST_RELEASE_ID|DOWNLOAD_PROD_EO_ZONE_ID|DOWNLOAD_(?:TEST|PROD)_(?:ORIGIN|COS_BUCKET|COS_SECRET_ID|COS_SECRET_KEY))$/u
@@ -26,11 +26,25 @@ const AMBIENT_RELEASE_SETTING = /^(?:DSH_DESKTOP_(?:APP_ID|AUTO_UPDATE_ENV|MANDA
  * @returns {NodeJS.ProcessEnv} Unsigned build environment with the standard application identifier and no update policy.
  */
 export function localMacOSPackageEnvironment(environment = process.env) {
+  return localPackageEnvironment(environment, 'com.deepseek.harness', AMBIENT_RELEASE_SETTING)
+}
+
+function localPackageEnvironment(environment, appId, releaseSettings) {
   return {
-    ...Object.fromEntries(Object.entries(environment).filter(([name]) => !AMBIENT_RELEASE_SETTING.test(name))),
-    DSH_DESKTOP_APP_ID: 'com.deepseek.harness',
+    ...Object.fromEntries(Object.entries(environment).filter(([name]) => !releaseSettings.test(name))),
+    DSH_DESKTOP_APP_ID: appId,
     DSH_DESKTOP_UNSIGNED: '1',
   }
+}
+
+/**
+ * Select fork-local Linux settings without reading release configuration or inheriting publisher inputs.
+ * @param {NodeJS.ProcessEnv} environment Parent environment for development tools and networking.
+ * @returns {NodeJS.ProcessEnv} Linux app identity with no official release configuration.
+ */
+export function localLinuxPackageEnvironment(environment = process.env) {
+  return localPackageEnvironment(environment, LINUX_DESKTOP_APP_ID,
+    /^(?:DSH_PACKAGING_(?:PRESET|CONFIG_DIR)|PACKAGE_(?:MACOS_.*|WINDOWS_.*|TEST_RELEASE_ID)|DSH_DESKTOP_(?:APP_ID|AUTO_UPDATE_ENV|UPDATE_CHANNEL|MANDATORY_UPDATE_.*|WINDOWS_.*|MACOS_.*)|APPLE_.*|(?:WIN_)?CSC_.*|DOWNLOAD_(?:TEST|PROD)_.*)$/iu)
 }
 
 /**
@@ -113,7 +127,7 @@ function requireReadableFile(environment, name) {
 /**
  * Validate the packaging mode before preparation without invoking a token or Apple's services.
  * @param {NodeJS.ProcessEnv} environment Selected local defaults or file-owned release settings.
- * @param {{ platform: 'win32' | 'darwin', arch: string }} target Selected release target.
+ * @param {{ platform: 'win32' | 'darwin' | 'linux', arch: string }} target Selected build target.
  * @param {{ unsigned?: boolean, prepareOnly?: boolean, skipNotarization?: boolean }} options Explicit packaging mode.
  * @returns {void}
  */
@@ -121,6 +135,12 @@ export function validateDesktopPackageEnvironment(environment, target, options =
   resolveDesktopTargetBuildPaths(environment, target.platform, target.arch)
   resolveDesktopAppId(environment)
   resolveNpmRegistry(environment)
+  if (target.platform === 'linux') {
+    if (environment.DSH_DESKTOP_APP_ID !== LINUX_DESKTOP_APP_ID || !options.unsigned) {
+      throw new Error('desktop package: Linux requires fork-local unsigned settings')
+    }
+    return
+  }
   if (target.platform !== 'darwin' || !options.unsigned) resolveDesktopPolicyEnvironment(environment)
   if (target.platform === 'darwin') resolveMacOSPackageSettings(environment)
   else resolveWindowsPackageSettings(environment)

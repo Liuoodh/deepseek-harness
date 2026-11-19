@@ -3,7 +3,36 @@ import { createHash } from 'node:crypto'
 import { lstat, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readAsar, type Node } from 'app-builder-lib/out/asar/asar.js'
-import type { DesktopRuntimeDescriptor, DesktopRuntimeFile } from '../src/runtime-tree.ts'
+import { parseDesktopRelease } from '../src/release.ts'
+import { readDesktopRuntime, type DesktopRuntimeDescriptor, type DesktopRuntimeFile } from '../src/runtime-tree.ts'
+import { LINUX_DESKTOP_APP_ID } from './desktop-build-paths.mjs'
+
+/**
+ * Bind an installed Linux smoke run to its independently supplied build evidence.
+ * @param archivePath - The installed application's ASAR file.
+ * @param expectedDirectory - Directory holding the preparation descriptor obtained with the installer.
+ * @param expectedVersion - Approved installer version, not its base runtime version.
+ * @param arch - Architecture of the target machine.
+ * @returns Expected runtime descriptor for complete archive verification before execution.
+ */
+export async function readInstalledLinuxSmokeDescriptor(
+  archivePath: string, expectedDirectory: string, expectedVersion: string, arch: string,
+): Promise<DesktopRuntimeDescriptor> {
+  const expected = readDesktopRuntime(expectedDirectory)
+  if (expected.schemaVersion !== 1 || expected.platform !== 'linux'
+    || (arch !== 'x64' && arch !== 'arm64') || expected.arch !== arch) {
+    throw new Error('desktop runtime: expected descriptor does not match this Linux architecture')
+  }
+  parseDesktopRelease(expected.release)
+  const archive = await readAsar(archivePath)
+  const metadata: unknown = await archive.readJson('package.json')
+  if (typeof metadata !== 'object' || metadata === null
+    || !('dshDesktopAppId' in metadata) || metadata.dshDesktopAppId !== LINUX_DESKTOP_APP_ID
+    || !('version' in metadata) || metadata.version !== expectedVersion) {
+    throw new Error('desktop runtime: installed application identity or build version differs')
+  }
+  return expected
+}
 
 /**
  * Compare the complete archived dsh tree with the sealed preparation inventory.

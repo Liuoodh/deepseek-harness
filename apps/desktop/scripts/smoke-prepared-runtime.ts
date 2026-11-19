@@ -17,13 +17,18 @@ import { verifyRuntimeArchive } from './verify-runtime-archive.ts'
  * @param node Target Electron executable.
  * @param resourcesRuntime External runtime directory beside the archive.
  * @param descriptor Runtime descriptor already verified against the selected target, which may differ from the build host.
+ * @param isolatedLinux Whether to run on a target machine without inheriting user settings or credentials.
  * @returns Resolves after archive integrity, payload checks, Host startup, Office conversion and teardown.
  */
 export async function smokePreparedRuntime(
-  root: string, node: string, resourcesRuntime: string, descriptor: DesktopRuntimeDescriptor,
+  root: string, node: string, resourcesRuntime: string, descriptor: DesktopRuntimeDescriptor, isolatedLinux = false,
 ): Promise<void> {
   const cache = await mkdtemp(join(tmpdir(), 'desktop-native-smoke-'))
-  const environment = { ...scrubWindowsSigningEnvironment(process.env), NODE_OPTIONS: '',
+  const baseEnvironment = isolatedLinux
+    ? { HOME: cache, DSH_HOME: cache, XDG_CONFIG_HOME: cache, XDG_CACHE_HOME: cache, XDG_DATA_HOME: cache,
+        XDG_STATE_HOME: cache, PATH: '/usr/bin:/bin', DSH_TELEMETRY_DISABLED: '1' }
+    : scrubWindowsSigningEnvironment(process.env)
+  const environment = { ...baseEnvironment, NODE_OPTIONS: '',
     NARB_NATIVE_CACHE_DIR: cache, NARB_DISABLE_NATIVE_CACHE: '0' }
   try {
     const archive = runtimeArchivePath(root)

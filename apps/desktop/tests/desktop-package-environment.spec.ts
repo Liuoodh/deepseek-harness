@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { loadDesktopPackageEnvironment, localMacOSPackageEnvironment, validateDesktopPackageEnvironment } from '../scripts/desktop-package-environment.mjs'
+import { loadDesktopPackageEnvironment, localLinuxPackageEnvironment, localMacOSPackageEnvironment, validateDesktopPackageEnvironment } from '../scripts/desktop-package-environment.mjs'
 import { resolveWindowsPackageSettings } from '../scripts/windows-package-settings.mjs'
 
 const WINDOWS = { platform: 'win32', arch: 'x64' } as const
@@ -23,6 +23,15 @@ async function withDirectory(action: (directory: string) => Promise<void>): Prom
 }
 
 describe('Desktop local packaging configuration', () => {
+  it('isolates the Linux app identity and excludes official release settings', () => {
+    const target = { platform: 'linux', arch: 'arm64' } as const
+    const selected = localLinuxPackageEnvironment({ ...RELEASE, PATH: '/usr/bin', CSC_LINK: 'ignored',
+      DSH_PACKAGING_PRESET: 'production', DSH_DESKTOP_UPDATE_CHANNEL: 'production' })
+    expect(selected).toEqual({ DSH_DESKTOP_APP_ID: 'io.github.liuoodh.dshlinux', DSH_DESKTOP_UNSIGNED: '1', PATH: '/usr/bin' })
+    expect(() => validateDesktopPackageEnvironment(selected, target, { unsigned: true })).not.toThrow()
+    expect(() => validateDesktopPackageEnvironment({ ...selected, DSH_DESKTOP_APP_ID: 'com.example.desktop' }, target, { unsigned: true })).toThrow()
+  })
+
   it('loads file-owned compression and defaults to fast Windows archive compression', async () => {
     expect(resolveWindowsPackageSettings({}).compressionLevel).toBe(3)
     await withDirectory(async (directory) => {

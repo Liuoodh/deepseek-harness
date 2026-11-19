@@ -18,7 +18,7 @@ Use the Linux `landlock-run` executable to confine subprocesses, or the `./flock
 
 ## Use
 
-`@deepseek-ai/node-addon-system/landlock-run` exports `launcherPath`, `probe`, and `grantArgs` for Landlock. Its executable name, flags, and failure semantics are defined by the [CLI contract](docs/cli-contract.md).
+`@deepseek-ai/node-addon-system/landlock-run` exports `launcherPath`, `probe`, and `grantArgs` for Landlock. Its executable name, flags, and failure semantics are defined by the [CLI contract](docs/cli-contract.md). Electron packagers must unpack `bin/landlock-run` from the ASAR to the paired `app.asar.unpacked` directory so the kernel can execute it.
 
 The [flock behavior contract](docs/flock-contract.md) maps descriptor, process, and advisory-lock semantics to independent native tests.
 

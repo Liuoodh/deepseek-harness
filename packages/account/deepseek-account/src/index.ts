@@ -147,7 +147,8 @@ export class DeepSeekAccount extends TypertRemoteService {
     }
     this.inferenceOrigin = inference.origin
     this.rewriteBrowserOrigin = resolved.rewriteBrowserOrigin
-    this.platform = resolved.desktopPlatform
+    // Schemastery leaves an omitted property undefined when its default is null.
+    this.platform = resolved.desktopPlatform ?? null
     this.requestHeaders = platformHeaders(resolved.requestHeaders)
     const accountHeaders = platformHeaders(resolved.accountRequestHeaders)
     this.accountRequestHeaders = { ...this.requestHeaders, ...accountHeaders }

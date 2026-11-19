@@ -2,8 +2,8 @@
 
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { rm } from 'node:fs/promises'
+import { accessSync, constants, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { open, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, resolve } from 'node:path'
@@ -132,6 +132,23 @@ function checkHtml() {
   assert.match(markdown, /\| x\s+\| 7\s+\|/u)
 }
 
+/** Exercise the staged Linux Landlock executable and POSIX addon on the build kernel. */
+async function checkLinuxSystem() {
+  const { launcherPath, probe } = await import(pathToFileURL(requireRuntime.resolve('@deepseek-ai/node-addon-system/landlock-run')).href)
+  const executable = launcherPath()
+  if (root.includes('/app.asar/')) assert.ok(executable.includes('/app.asar.unpacked/'), executable)
+  accessSync(executable, constants.X_OK)
+  assert.notEqual(probe(executable), 'unusable', 'Linux packaging requires a build kernel with Landlock enabled')
+
+  const { tryLockExclusive } = await import(pathToFileURL(requireRuntime.resolve('@deepseek-ai/node-addon-system/flock')).href)
+  const handle = await open(join(scratch, 'payload.lock'), 'wx', 0o600)
+  try {
+    await tryLockExclusive(handle.fd)
+  } finally {
+    await handle.close()
+  }
+}
+
 try {
   const builtin = requireRuntime('node-addon-require-builtin')
   assert.equal(typeof builtin.requireBuiltin('internal/modules/esm/loader').getOrInitializeCascadedLoader, 'function')
@@ -147,6 +164,10 @@ try {
   await checkPty()
   console.error('runtime payload: search')
   await checkSearch()
+  if (process.platform === 'linux') {
+    console.error('runtime payload: Landlock and flock')
+    await checkLinuxSystem()
+  }
   console.error('runtime payload: checks complete; awaiting process exit')
 } finally {
   // This private tree contains only fixture files; Windows may release handles after terminal exit.
@@ -156,5 +177,6 @@ try {
 // Natural event-loop drain includes node-pty's worker and console-list helper teardown.
 process.once('beforeExit', () => {
   console.log(JSON.stringify({ node: process.versions.node, platform: process.platform, arch: process.arch,
-    koffi: true, sharp: true, html: true, pty: true, pnpm: true, grep: true, glob: true }))
+    koffi: true, sharp: true, html: true, pty: true, pnpm: true, grep: true, glob: true,
+    ...(process.platform === 'linux' ? { landlock: true, flock: true } : {}) }))
 })

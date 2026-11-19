@@ -1,6 +1,6 @@
 /** Validate packaged Desktop update artifacts before any network upload begins. */
 
-import type { DesktopPackageTargetName } from './package-target.ts'
+import type { DesktopAutoUpdateTarget as DesktopPackageTargetName } from '@deepseek-ai/dsh-desktop-publisher/desktop-auto-update-environment.mjs'
 import type { DesktopUploadArtifact, DesktopUploadPlan } from '@deepseek-ai/dsh-desktop-publisher/desktop-upload-types.ts'
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'

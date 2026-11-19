@@ -24,7 +24,14 @@ import { resolveDesktopAutoUpdateConfig } from '@deepseek-ai/dsh-desktop-publish
 import { resolveDesktopBuildCommit } from './desktop-build-commit.mjs'
 import { resolveDesktopBuildVersion } from './desktop-build-version.mjs'
 import { resolveDesktopPolicyEnvironment } from './desktop-policy-environment.mjs'
-import { desktopArtifactOutput, desktopTargetBuildPaths, resolveDesktopBuildTarget } from './desktop-build-paths.mjs'
+import {
+  desktopArtifactOutput,
+  desktopTargetBuildPaths,
+  desktopTargetPlatform,
+  LINUX_DESKTOP_APP_ID,
+  LINUX_DESKTOP_EXECUTABLE,
+  resolveDesktopBuildTarget,
+} from './desktop-build-paths.mjs'
 import { installWindowsDirectoryInstaller } from './windows-directory-installer.mjs'
 import { preserveWindowsRuntimeSignature, signWindowsCode } from './windows-runtime-signature.mjs'
 import { prepareWindowsAsarUnpack, verifyWindowsAsarUnpack } from './windows-asar-unpack.mjs'
@@ -51,10 +58,10 @@ export function createElectronBuilderConfig(
   preparedRuntime = undefined,
   preparedRuntimeVersion = undefined,
 ) {
-  const appId = resolveDesktopAppId(env)
-  const targetPlatform = env.DSH_DESKTOP_TARGET_PLATFORM
-  const resolvedPlatform = targetPlatform ?? hostPlatform
-  const resolvedArch = env.DSH_DESKTOP_TARGET_ARCH ?? hostArch
+  const buildTarget = resolveDesktopBuildTarget(env, hostPlatform, hostArch)
+  const target = desktopTargetPlatform(buildTarget)
+  const packagesLinux = target.platform === 'linux'
+  const { platform: resolvedPlatform, arch: resolvedArch } = target
   if (env.DSH_DESKTOP_UNSIGNED !== undefined && !['0', '1'].includes(env.DSH_DESKTOP_UNSIGNED)) {
     throw new Error('desktop package: DSH_DESKTOP_UNSIGNED must be 0 or 1')
   }
@@ -64,13 +71,23 @@ export function createElectronBuilderConfig(
     throw new Error('desktop package: DSH_DESKTOP_MACOS_SKIP_NOTARIZATION must be 0 or 1')
   }
   if (skipNotarization && (unsigned || resolvedPlatform !== 'darwin')) throw new Error('Skipping notarization requires a signed macOS build')
-  const packagesMacOS = targetPlatform === 'darwin' || (targetPlatform === undefined && hostPlatform === 'darwin')
+  if (packagesLinux && (hostPlatform !== 'linux' || hostArch !== resolvedArch)) {
+    throw new Error(`desktop package: ${buildTarget} requires a native Linux ${resolvedArch} build host`)
+  }
+  if (packagesLinux && (!unsigned || preparedRuntime !== undefined || preparedRuntimeVersion !== undefined)) {
+    throw new Error('desktop package: Linux is only supported for local unsigned builds')
+  }
+  const appId = resolveDesktopAppId(env)
+  if (packagesLinux && appId !== LINUX_DESKTOP_APP_ID) {
+    throw new Error(`desktop package: Linux requires DSH_DESKTOP_APP_ID=${LINUX_DESKTOP_APP_ID}`)
+  }
+  const packagesMacOS = resolvedPlatform === 'darwin'
   const packagesWindows = resolvedPlatform === 'win32'
-  const policy = packagesMacOS && unsigned ? undefined : resolveDesktopPolicyEnvironment(env)
+  const policy = (packagesMacOS && unsigned) || packagesLinux ? undefined : resolveDesktopPolicyEnvironment(env)
   if (resolvedPlatform === 'win32') installWindowsDirectoryInstaller()
   const macOSSigning = packagesMacOS && !unsigned ? resolveMacOSSigningEnvironment(env) : undefined
   if (packagesMacOS && !unsigned && !skipNotarization) resolveMacOSNotarizationEnvironment(env)
-  const buildPaths = desktopTargetBuildPaths(resolveDesktopBuildTarget(env, hostPlatform, hostArch), env)
+  const buildPaths = desktopTargetBuildPaths(buildTarget, env)
   const output = desktopArtifactOutput(buildPaths, { unsigned, skipNotarization })
   let primaryRuntimeDestination
   let dshDestination
@@ -80,6 +97,8 @@ export function createElectronBuilderConfig(
     // LaunchServices opens the Computer Use helper as an application, so every file of its bundles stays on disk.
     // Both architectures ship: they form one notarized payload whose manifest staging verifies as a whole.
     '**/node_modules/@deepseek-ai/dsh-cua-macos/native/bin/**/*']
+  // The kernel executes the launcher directly; it cannot read a member of app.asar.
+  if (packagesLinux) unpack.push(`**/node_modules/@deepseek-ai/node-addon-system-linux-${resolvedArch}/bin/landlock-run`)
   const windowsSigner = packagesWindows && !unsigned
     ? createWindowsTokenSigner({
         certificateFile: env.DSH_DESKTOP_WINDOWS_CER_FILE,
@@ -106,21 +125,28 @@ export function createElectronBuilderConfig(
   const productVersion = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')).version
   const buildVersion = resolveDesktopBuildVersion(env, productVersion)
   const packaged = resolveDesktopBuildCommit(env)
+  const productName = packagesLinux ? 'DSH Linux' : 'DeepSeek Harness'
+  const icon = fileURLToPath(new URL('../resources/icon-windows.png', import.meta.url))
+  const linuxIcon = fileURLToPath(new URL('../resources/icon-linux.png', import.meta.url))
   return {
     appId,
-    protocols: [{ name: 'DeepSeek Harness', schemes: ['dsh'] }],
+    protocols: [{ name: productName, schemes: ['dsh'] }],
     extraMetadata: {
       dshDesktopAppId: appId,
-      dshDesktopUpdateChannel: update?.channel ?? 'nightly',
+      ...(packagesLinux ? {
+        productName,
+        desktopName: `${LINUX_DESKTOP_APP_ID}.desktop`,
+        homepage: 'https://github.com/Liuoodh/deepseek-harness',
+      } : { dshDesktopUpdateChannel: update?.channel ?? 'nightly' }),
       ...(policy === undefined ? {} : { dshMandatoryUpdatePolicy: policy }),
       ...buildVersion === productVersion ? {} : { version: buildVersion },
       ...packaged === undefined ? {} : { dshBuildCommit: packaged.commit, dshBuildDirty: packaged.dirty },
     },
-    productName: 'DeepSeek Harness',
+    productName,
     // The default copyright uses author.name; this line names the product instead.
     copyright: `Copyright © ${new Date().getFullYear()} \${productName}`,
     // Unsigned builds carry their own suffix so a shared file can never pass for a release artifact.
-    artifactName: `deepseek-harness-\${version}-\${os}-\${arch}${output.suffix}.\${ext}`,
+    artifactName: `${packagesLinux ? LINUX_DESKTOP_EXECUTABLE : 'deepseek-harness'}-\${version}-\${os}-\${arch}${output.suffix}.\${ext}`,
     directories: { output: output.directory },
     asar: true,
     electronDist: buildPaths.electron,
@@ -159,8 +185,8 @@ export function createElectronBuilderConfig(
     asarUnpack: unpack,
     extraResources: [
       { from: buildPaths.runtime, to: 'runtime' },
-      { from: fileURLToPath(new URL('../resources/icon-windows.png', import.meta.url)), to: 'icon.png' },
-      // Windows tray bitmaps; macOS keeps the Dock and ships no menu bar icon.
+      { from: packagesLinux ? linuxIcon : icon, to: 'icon.png' },
+      // Only Windows carries tray bitmaps.
       ...(packagesWindows ? [{ from: fileURLToPath(new URL('../resources/tray-windows.ico', import.meta.url)), to: 'tray.ico' }] : []),
     ],
     mac: {
@@ -188,6 +214,9 @@ export function createElectronBuilderConfig(
       writeUpdateInfo: false,
     },
     beforePack: async context => {
+      if ((context.electronPlatformName === 'linux') !== packagesLinux) {
+        throw new Error('desktop package: electron-builder Linux platform must match the prepared target')
+      }
       const office = await officePackageDirectories(buildPaths.dsh, { platform: resolvedPlatform, arch: resolvedArch })
       const patterns = office.map(directory => `**/${relative(buildPaths.dsh, directory).split(sep).join('/')}/**/*`)
       const existing = context.packager.config.asarUnpack ?? []
@@ -245,7 +274,7 @@ export function createElectronBuilderConfig(
       )
     },
     win: {
-      icon: fileURLToPath(new URL('../resources/icon-windows.png', import.meta.url)),
+      icon,
       forceCodeSigning: !unsigned,
       signtoolOptions: {
         sign: windowsSigner,
@@ -254,10 +283,33 @@ export function createElectronBuilderConfig(
       },
       target: ['nsis'],
     },
-    linux: {
-      category: 'Development',
-      target: ['AppImage'],
-    },
+    ...(packagesLinux ? {
+      linux: {
+        category: 'Development',
+        executableName: LINUX_DESKTOP_EXECUTABLE,
+        icon: linuxIcon,
+        maintainer: 'DSH Linux community build <noreply@example.invalid>',
+        syncDesktopName: true,
+        target: ['deb', 'rpm'],
+      },
+      // FPM replaces its defaults when depends is set. Keep the desktop defaults and
+      // declare Electron's ALSA, GBM, CUPS, udev and NSPR providers explicitly.
+      deb: {
+        packageName: LINUX_DESKTOP_EXECUTABLE,
+        depends: [
+          'libgtk-3-0t64 | libgtk-3-0', 'libnotify4', 'libnss3', 'libxss1', 'libxtst6', 'xdg-utils',
+          'libatspi2.0-0t64 | libatspi2.0-0', 'libuuid1', 'libsecret-1-0',
+          'libasound2t64 | libasound2', 'libgbm1', 'libcups2t64 | libcups2', 'libudev1', 'libnspr4',
+        ],
+      },
+      rpm: {
+        packageName: LINUX_DESKTOP_EXECUTABLE,
+        depends: [
+          'gtk3', 'libnotify', 'nss', 'libXScrnSaver', '(libXtst or libXtst6)', 'xdg-utils', 'at-spi2-core',
+          '(libuuid or libuuid1)', 'alsa-lib', 'mesa-libgbm', 'cups-libs', 'systemd-libs', 'nspr',
+        ],
+      },
+    } : {}),
     nsis: {
       uninstallDisplayName: '${productName}',
       installerSidebar: join(buildPaths.root, 'installer-ui', 'uninstaller-sidebar.bmp'),

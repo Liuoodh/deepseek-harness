@@ -5,7 +5,8 @@ export interface DesktopElectronBuilderConfig {
   readonly appId: string
   readonly copyright: string
   readonly artifactName: string
-  readonly protocols: readonly [{ readonly name: 'DeepSeek Harness'; readonly schemes: readonly ['dsh'] }]
+  readonly productName: 'DeepSeek Harness' | 'DSH Linux'
+  readonly protocols: readonly [{ readonly name: DesktopElectronBuilderConfig['productName']; readonly schemes: readonly ['dsh'] }]
   readonly directories: {
     readonly output: string
   }
@@ -14,8 +15,15 @@ export interface DesktopElectronBuilderConfig {
     { readonly from: string, readonly to: 'dsh', readonly filter: readonly ['**/*'] },
     { readonly from: string, readonly to: 'dsh/node_modules', readonly filter: readonly ['**/*'] },
   ]
-  readonly extraMetadata: { readonly dshDesktopAppId: string }
+  readonly extraMetadata: {
+    readonly dshDesktopAppId: string
+    readonly desktopName?: string
+    readonly homepage?: string
+  }
+  readonly asar: true
   readonly asarUnpack: readonly string[]
+  readonly electronDist: string
+  readonly electronFuses: { readonly runAsNode: true }
   readonly extraResources: readonly [
     { readonly from: string, readonly to: 'runtime' },
     { readonly from: string, readonly to: 'icon.png' },
@@ -46,6 +54,16 @@ export interface DesktopElectronBuilderConfig {
       readonly signingHashAlgorithms: readonly string[]
     }
   }
+  readonly linux?: {
+    readonly category: 'Development'
+    readonly executableName: string
+    readonly icon: string
+    readonly maintainer: string
+    readonly syncDesktopName: true
+    readonly target: readonly ['deb', 'rpm']
+  }
+  readonly deb?: { readonly packageName: string, readonly depends: readonly string[] }
+  readonly rpm?: { readonly packageName: string, readonly depends: readonly string[] }
   readonly nsis: {
     readonly uninstallDisplayName: '${productName}'
     readonly include: string
