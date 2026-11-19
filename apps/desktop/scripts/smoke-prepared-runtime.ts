@@ -35,6 +35,7 @@ export async function smokePreparedRuntime(
     if (archive !== undefined) await verifyRuntimeArchive(archive, descriptor)
     const { stdout } = await promisify(execFile)(node, [
       '--expose-internals', resolve(import.meta.dirname, '../tests/fixtures/runtime-payload-smoke.mjs'), root, resourcesRuntime,
+      ...(isolatedLinux ? ['--installed-linux'] : []),
     ], { timeout: 120_000, windowsHide: true,
       env: desktopNodeEnvironment(node, join(resourcesRuntime, 'bin'), environment) }).catch((error: unknown) => {
       if (error instanceof Error) {

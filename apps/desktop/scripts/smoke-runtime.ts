@@ -27,7 +27,7 @@ export function assertOfficeSkillsLoadable(results: ReadonlyArray<{ readonly nam
 
 /**
  * Check CLI package operations, Host startup, its frontend, external plugins, packaged Office skill loading,
- * and real Office rendering, conversion, and recalculation.
+ * real Office rendering, conversion and recalculation, and the active Linux tool sandbox.
  * @param root - Materialized dsh resources.
  * @param node - Prepared target Electron executable.
  * @param runtime - Verified resource descriptor.
@@ -97,11 +97,24 @@ export function apply(ctx) {
       name: pluginName, version: '1.0.0', type: 'module', exports: './index.js',
       peerDependencies: { '@deepseek-ai/cordis': cordis.version }, dsh: { bundle: { patch: './bundle.yml' } },
     }))
+    cpSync(fileURLToPath(new URL('../tests/fixtures/linux-sandbox-smoke.mjs', import.meta.url)), join(plugin, 'linux-sandbox-smoke.mjs'))
     writeFileSync(join(plugin, 'index.js'), `
 import { Context } from '@deepseek-ai/cordis'
 import { inspect } from 'node:util'
 import { readFile } from 'node:fs/promises'
+import { checkLinuxSandbox } from './linux-sandbox-smoke.mjs'
 export function apply(ctx) {
+  if (process.platform === 'linux') {
+    ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/desktop-smoke-linux-sandbox',
+      async handler(_request, response) {
+        try {
+          response.end(await checkLinuxSandbox(ctx.sandbox, ${JSON.stringify(home)}))
+        } catch (error) {
+          response.statusCode = 500
+          response.end(inspect(error, { depth: 2 }))
+        }
+      } }))
+  }
   if (!(ctx instanceof Context)) throw new Error('desktop runtime: external plugin loaded another Cordis instance')
   ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/desktop-smoke',
     handler(_request, response) { response.end('plugin route ready') } }))
@@ -171,7 +184,8 @@ export function apply(ctx) {
   }
 }
 `)
-    writeFileSync(join(plugin, 'bundle.yml'), '- insert:\n    - id: desktop-runtime-smoke-plugin\n      name: desktop-runtime-smoke-plugin\n      inject: [webServer, officeKit, pluginManager, skills]\n')
+    const sandboxInjection = runtime.platform === 'linux' ? ', sandbox' : ''
+    writeFileSync(join(plugin, 'bundle.yml'), `- insert:\n    - id: desktop-runtime-smoke-plugin\n      name: desktop-runtime-smoke-plugin\n      inject: [webServer, officeKit, pluginManager, skills${sandboxInjection}]\n`)
     cpSync(plugin, join(profile, 'node_modules', pluginName), { recursive: true })
     const manifest = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8')) as {
       dependencies?: Record<string, string>
@@ -192,6 +206,16 @@ export function apply(ctx) {
     }
     const pluginResponse = await fetch(new URL('/desktop-smoke', ready.url), { headers: { cookie } })
     if (await pluginResponse.text() !== 'plugin route ready') throw new Error('desktop runtime: plugin HTTP route failed')
+    if (runtime.platform === 'linux') {
+      const response = await fetch(new URL('/desktop-smoke-linux-sandbox', ready.url), {
+        headers: { cookie }, signal: AbortSignal.timeout(30_000),
+      })
+      const result = await response.text()
+      if (!response.ok || !/^(?:bwrap|landlock-run)\/(?:full|partial)$/u.test(result)) {
+        throw new Error(`desktop runtime: packaged Linux sandbox smoke failed: ${result}`)
+      }
+      console.log(`desktop runtime: confined command passed (${result})`)
+    }
     const installation = await fetch(new URL('/desktop-smoke-install', ready.url), {
       headers: { cookie }, signal: AbortSignal.timeout(120_000),
     })

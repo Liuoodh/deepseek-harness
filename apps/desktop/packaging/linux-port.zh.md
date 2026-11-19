@@ -86,6 +86,6 @@ pnpm --dir apps/desktop exec tsx scripts/smoke-packaged-runtime.ts \
   --expected-build-version "$APPROVED_VERSION"
 ```
 
-将 `APPROVED_VERSION` 设为工作流确认的原始版本号（不做 DEB/RPM 格式转换），以普通测试用户执行。验证器先核对架构、应用标识和版本，并用构建侧清单比对安装后的 DSH 归档和外置文件，再用临时配置启动安装包内的 Host，检查原生工具、离线样例插件和 Office Skill。它不验证个人插件、在线登录或安装包签名。原生冒烟要求可用的 Landlock；若目标机仅能通过 bubblewrap 运行 DSH，须单独记录此项限制。
+将 `APPROVED_VERSION` 设为工作流确认的原始版本号（不做 DEB/RPM 格式转换），以普通测试用户执行。验证器先核对架构、应用标识和版本，并用构建侧清单比对安装后的 DSH 归档和外置文件，再用临时配置启动安装包内的 Host，检查原生工具、离线样例插件和 Office Skill。它不验证个人插件、在线登录或安装包签名。安装验收记录 Landlock 探测结果，并要求安装包内的 Host 通过实际选中的 bubblewrap 或 Landlock 执行一条固定命令、报告约束级别。两种后端都不可用时验收失败。构建机仍须支持 Landlock。
 
 每个系统和架构分别记录 `/etc/os-release`、内核和桌面版本、`getconf GNU_LIBC_VERSION`、包 SHA-256、安装/卸载返回码和相关日志。核对非 root 从系统菜单启动、默认 Chromium 沙箱、实际的 DSH 工具沙箱后端、登录和真实会话、中文输入、文件选择器及上一版资料升级。插件/Skill 用允许公开的样本测试，不提交用户的凭证、私有配置或技能正文。Docker/WSL 和 Windows 上的单元测试不能替代目标桌面实测。

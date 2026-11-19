@@ -132,13 +132,16 @@ function checkHtml() {
   assert.match(markdown, /\| x\s+\| 7\s+\|/u)
 }
 
-/** Exercise the staged Linux Landlock executable and POSIX addon on the build kernel. */
+/** Verify native payloads; only a build host must support the bundled Landlock runner. */
 async function checkLinuxSystem() {
   const { launcherPath, probe } = await import(pathToFileURL(requireRuntime.resolve('@deepseek-ai/node-addon-system/landlock-run')).href)
   const executable = launcherPath()
   if (root.includes('/app.asar/')) assert.ok(executable.includes('/app.asar.unpacked/'), executable)
   accessSync(executable, constants.X_OK)
-  assert.notEqual(probe(executable), 'unusable', 'Linux packaging requires a build kernel with Landlock enabled')
+  const landlock = probe(executable)
+  if (process.argv[4] !== '--installed-linux') {
+    assert.notEqual(landlock, 'unusable', 'Linux packaging requires a build kernel with Landlock enabled')
+  }
 
   const { tryLockExclusive } = await import(pathToFileURL(requireRuntime.resolve('@deepseek-ai/node-addon-system/flock')).href)
   const handle = await open(join(scratch, 'payload.lock'), 'wx', 0o600)
@@ -147,8 +150,10 @@ async function checkLinuxSystem() {
   } finally {
     await handle.close()
   }
+  return landlock
 }
 
+let landlock
 try {
   const builtin = requireRuntime('node-addon-require-builtin')
   assert.equal(typeof builtin.requireBuiltin('internal/modules/esm/loader').getOrInitializeCascadedLoader, 'function')
@@ -166,7 +171,7 @@ try {
   await checkSearch()
   if (process.platform === 'linux') {
     console.error('runtime payload: Landlock and flock')
-    await checkLinuxSystem()
+    landlock = await checkLinuxSystem()
   }
   console.error('runtime payload: checks complete; awaiting process exit')
 } finally {
@@ -178,5 +183,5 @@ try {
 process.once('beforeExit', () => {
   console.log(JSON.stringify({ node: process.versions.node, platform: process.platform, arch: process.arch,
     koffi: true, sharp: true, html: true, pty: true, pnpm: true, grep: true, glob: true,
-    ...(process.platform === 'linux' ? { landlock: true, flock: true } : {}) }))
+    ...(landlock === undefined ? {} : { landlock, flock: true }) }))
 })
