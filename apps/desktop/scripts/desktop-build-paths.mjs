@@ -84,8 +84,9 @@ export function desktopTargetBuildPaths(target, environment = process.env) {
 /**
  * Return the platform and architecture of the payload one release target prepares.
  * Windows is prepared as x64 only, so this differs from the build host on an arm64 Windows machine.
- * @param {DesktopBuildTarget} target - Supported Desktop target name.
- * @returns {{ platform: 'darwin' | 'win32' | 'linux', arch: 'arm64' | 'x64' }} Platform and architecture of the prepared payload.
+ * @template {DesktopBuildTarget} Target
+ * @param {Target} target - Supported Desktop target name.
+ * @returns {(typeof TARGETS)[Target]} Platform and architecture of the prepared payload.
  */
 export function desktopTargetPlatform(target) {
   assertSupportedTarget(target)

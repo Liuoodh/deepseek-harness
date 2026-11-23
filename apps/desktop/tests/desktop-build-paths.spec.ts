@@ -1,5 +1,6 @@
 import { join, resolve, sep } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
+import type { DesktopAutoUpdateTarget } from '@deepseek-ai/dsh-desktop-publisher/desktop-auto-update-environment.mjs'
 import {
   desktopTargetBuildPaths,
   desktopTargetPlatform,
@@ -84,6 +85,14 @@ describe('desktop build paths', () => {
     expect(desktopTargetPlatform('win-x64')).toEqual({ platform: 'win32', arch: 'x64' })
     expect(desktopTargetPlatform('linux-x64')).toEqual({ platform: 'linux', arch: 'x64' })
     expect(desktopTargetPlatform('linux-arm64')).toEqual({ platform: 'linux', arch: 'arm64' })
+  })
+
+  it('infers platform and architecture only from the requested targets', () => {
+    const official = desktopTargetPlatform<DesktopAutoUpdateTarget>('win-x64')
+    expectTypeOf(official.platform).toEqualTypeOf<'darwin' | 'win32'>()
+    const linux = desktopTargetPlatform('linux-arm64')
+    expectTypeOf(linux.platform).toEqualTypeOf<'linux'>()
+    expectTypeOf(linux.arch).toEqualTypeOf<'arm64'>()
   })
 
   it('locates the executable in the target Electron archive', () => {

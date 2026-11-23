@@ -1,5 +1,13 @@
+interface DesktopBuildTargetPlatforms {
+  'mac-arm64': { readonly platform: 'darwin', readonly arch: 'arm64' }
+  'mac-x64': { readonly platform: 'darwin', readonly arch: 'x64' }
+  'win-x64': { readonly platform: 'win32', readonly arch: 'x64' }
+  'linux-arm64': { readonly platform: 'linux', readonly arch: 'arm64' }
+  'linux-x64': { readonly platform: 'linux', readonly arch: 'x64' }
+}
+
 /** Desktop build targets, independent of the official update publisher. */
-export type DesktopBuildTarget = 'mac-arm64' | 'mac-x64' | 'win-x64' | 'linux-arm64' | 'linux-x64'
+export type DesktopBuildTarget = keyof DesktopBuildTargetPlatforms
 
 /** Installed executable and package name for the Linux desktop. */
 export const LINUX_DESKTOP_EXECUTABLE: 'dsh-linux'
@@ -52,10 +60,7 @@ export function desktopTargetBuildPaths(target: DesktopBuildTarget, environment?
  * @param target - Supported Desktop target name.
  * @returns Platform and architecture of the prepared payload.
  */
-export function desktopTargetPlatform(target: DesktopBuildTarget): {
-  readonly platform: 'darwin' | 'win32' | 'linux'
-  readonly arch: 'arm64' | 'x64'
-}
+export function desktopTargetPlatform<Target extends DesktopBuildTarget>(target: Target): DesktopBuildTargetPlatforms[Target]
 
 /**
  * Name the Electron executable inside an extracted target distribution.
