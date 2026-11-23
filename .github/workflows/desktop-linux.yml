@@ -162,10 +162,19 @@ jobs:
             skip_smoke 'the Desktop storage harness is unavailable on this revision.'
             exit 0
           fi
-          test -s apps/desktop/lib/types/platform-view.js
-          electron=$(node -p 'require("./apps/desktop/node_modules/electron")')
-          test -x "$electron"
+          if [[ ! -s apps/desktop/lib/types/platform-view.js ]]; then
+            printf '%s\n' '::error::The built Desktop Platform view is missing; build repository artifacts first.'
+            exit 1
+          fi
           unset ELECTRON_RUN_AS_NODE ELECTRON_DISABLE_SANDBOX
+          # On a clean checkout the Electron module's lazy installer writes to stdout.
+          # Install first so the next command captures only the executable path.
+          pnpm --filter @deepseek-ai/dsh-desktop exec install-electron
+          electron=$(node -p 'require("./apps/desktop/node_modules/electron")')
+          if [[ ! -x "$electron" ]]; then
+            printf '::error::The installed Electron path is not executable: %q\n' "$electron"
+            exit 1
+          fi
 
           # Check the Chromium sandbox can launch without changing app or host policy.
           cat > "$smoke/preload.cjs" <<'JS'
