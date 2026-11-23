@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DESKTOP_HOST_RUNTIME_FILES, DESKTOP_PACKAGES_DIR } from '../src/core-package-set.ts'
+import { desktopTargetPlatform } from '../scripts/desktop-build-paths.mjs'
 import {
   assertDesktopHostPackageFiles,
   prepareDesktopPackageSet,
@@ -112,12 +113,24 @@ const targetManifests = () => new Map<string, PackedDesktopPackage>([
 ])
 
 it.each([
-  ['darwin', 'arm64', true], ['darwin', 'x64', true], ['win32', 'x64', false],
-] as const)('selects the CUA native tarball for target %s/%s independently of the host', (platform, arch, included) => {
-  const selected = selectDesktopPackageClosure(targetManifests(), { platform, arch }).map(entry => entry.manifest.name)
+  ['mac-arm64', true], ['mac-x64', true], ['win-x64', false], ['linux-arm64', false], ['linux-x64', false],
+] as const)('selects the CUA native tarball for %s independently of the host', (target, included) => {
+  const selected = selectDesktopPackageClosure(targetManifests(), desktopTargetPlatform(target)).map(entry => entry.manifest.name)
   expect(selected.includes(macProvider)).toBe(included)
   expect(selected).toContain('@deepseek-ai/dsh-cua')
   expect(selected).toContain(cuaBundle)
+})
+
+it.each(['linux-arm64', 'linux-x64'] as const)('selects only the matching Linux system tarball for %s', (target) => {
+  const names = ['@deepseek-ai/node-addon-system-linux-arm64', '@deepseek-ai/node-addon-system-linux-x64'] as const
+  const manifests = targetManifests()
+  const system = '@deepseek-ai/node-addon-system'
+  manifests.set('@deepseek-ai/dsh', packed('@deepseek-ai/dsh', { dependencies: { [system]: '1.0.0' } }))
+  manifests.set(system, packed(system, { optionalDependencies: { [names[0]]: '1.0.0', [names[1]]: '1.0.0' } }))
+  manifests.set(names[0], packed(names[0], { os: ['linux'], cpu: ['arm64'] }))
+  manifests.set(names[1], packed(names[1], { os: ['linux'], cpu: ['x64'] }))
+  const selected = selectDesktopPackageClosure(manifests, desktopTargetPlatform(target)).map(entry => entry.manifest.name)
+  expect(names.filter(name => selected.includes(name))).toEqual([`@deepseek-ai/node-addon-system-${target}`])
 })
 
 it.each([
