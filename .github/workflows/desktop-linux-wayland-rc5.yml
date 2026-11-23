@@ -1,0 +1,86 @@
+name: Desktop · Linux · ARM64 Wayland rc.5 verification
+
+# One-time verification of the already approved, built and verified artifact. No packaging or publication.
+on:
+  push:
+    branches: [port/linux-kylin-wayland-rc5]
+    paths: [.github/workflows/desktop-linux-wayland-rc5.yml]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify-installed-arm64-wayland:
+    if: >-
+      github.repository == 'Liuoodh/deepseek-harness' && github.event_name == 'push' &&
+      github.ref == 'refs/heads/port/linux-kylin-wayland-rc5' && github.event.created == true &&
+      github.event.deleted == false && github.run_attempt == '1'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+      - name: Verify native host and protocol observer
+        run: |
+          test "$(uname -sm)" = 'Linux aarch64'
+          test "$(dpkg --print-architecture)" = arm64
+          test "$(id -u)" != 0
+          node --test apps/desktop/tests/read-dsh-wayland-welcome.test.mjs
+      - name: Download and verify the pinned existing DEB
+        timeout-minutes: 7
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -n "$RUNNER_TEMP"
+          mkdir -m 700 -- "$RUNNER_TEMP/dsh-wayland-candidate"
+          cd -- "$RUNNER_TEMP/dsh-wayland-candidate"
+          endpoint=/repos/Liuoodh/deepseek-harness/actions/artifacts/14818645053
+          gh api "$endpoint" | jq -e '
+            .id == 14818645053 and .name == "desktop-linux-arm64-unsigned" and .expired == false
+            and .size_in_bytes == 512691117 and .workflow_run.id == 45169129600
+            and .workflow_run.head_sha == "19b9136b0391115bdb546c1a4b9b7bbf1ab58033"
+            and .digest == "sha256:010af63fb6872bb6169bab2838b02949bd32f1afd41ee1830bfdcaca9690596b"
+          ' >/dev/null
+          timeout --kill-after=5s 300s gh api "$endpoint/zip" > candidate.zip
+          test "$(stat -c %s -- candidate.zip)" = 512691117
+          printf '%s  candidate.zip\n' 010af63fb6872bb6169bab2838b02949bd32f1afd41ee1830bfdcaca9690596b | sha256sum --check --strict
+          package=dsh-linux-0.2.2-rc.5.20261118.1-linux-arm64-unsigned.deb
+          unzip -p candidate.zip "$package" > candidate.deb
+          printf '%s  candidate.deb\n' 89880e796ebeaa6b61ff891384b085b6fbffa988682ee0b061990e09f69891c7 | sha256sum --check --strict
+          test "$(dpkg-deb -f candidate.deb Package)" = dsh-linux
+          test "$(dpkg-deb -f candidate.deb Version)" = '0.2.2~rc.5.20261118.1'
+          test "$(dpkg-deb -f candidate.deb Architecture)" = arm64
+      - name: Refresh Ubuntu package indexes
+        timeout-minutes: 6
+        run: sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -q --error-on=any
+      - name: Install test compositor and exact existing package
+        timeout-minutes: 10
+        run: |
+          if dpkg-query -W dsh-linux >/dev/null 2>&1; then
+            echo '::error::Expected a clean ephemeral runner without DSH Linux.'
+            exit 1
+          fi
+          touch -- "$RUNNER_TEMP/dsh-wayland-candidate/installation-attempted"
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -yq --no-install-recommends \
+            weston dbus-daemon "$RUNNER_TEMP/dsh-wayland-candidate/candidate.deb"
+          test "$(dpkg-query -W -f='${Version}/${Architecture}' dsh-linux)" = '0.2.2~rc.5.20261118.1/arm64'
+      - name: Prove default native Wayland welcome
+        timeout-minutes: 3
+        run: dbus-run-session -- bash apps/desktop/scripts/smoke-dsh-wayland-welcome.sh '/opt/DSH Linux/dsh-linux'
+      - name: Purge the candidate test installation
+        if: always()
+        timeout-minutes: 3
+        run: |
+          if [[ -f $RUNNER_TEMP/dsh-wayland-candidate/installation-attempted ]] && dpkg-query -W dsh-linux >/dev/null 2>&1; then
+            sudo apt-get purge -yq dsh-linux
+            ! dpkg-query -W dsh-linux >/dev/null 2>&1
+            test ! -e '/opt/DSH Linux/dsh-linux'
+          fi
