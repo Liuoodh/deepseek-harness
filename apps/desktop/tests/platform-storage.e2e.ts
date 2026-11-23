@@ -46,7 +46,7 @@ it.skipIf(!hasDisplay)('retains dismissed notices across view and process restar
     if (!existsSync(builtView)) throw new Error(`missing built Platform view ${builtView}; run pnpm run build:lib:host`)
     const userData = join(root, 'browser')
     await mkdir(userData)
-    const electron: unknown = require('electron')
+    const electron: unknown = process.env.DSH_TEST_ELECTRON ?? require('electron')
     if (typeof electron !== 'string') throw new Error('Electron executable is unavailable')
     const fixture = fileURLToPath(new URL('./fixtures/platform-storage-smoke.mjs', import.meta.url))
     const observed: string[] = []

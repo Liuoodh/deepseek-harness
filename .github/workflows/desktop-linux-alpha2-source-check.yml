@@ -2,13 +2,13 @@ name: Desktop · Linux Alpha source check
 on:
   push:
     branches:
-      - port/linux-alpha2-source-check
+      - port/linux-alpha2-source-sandbox
 permissions:
   contents: read
 jobs:
   alpha-source:
     name: Alpha Linux source (${{ matrix.arch }})
-    if: ${{ github.repository == 'Liuoodh/deepseek-harness' && github.event_name == 'push' && github.ref == 'refs/heads/port/linux-alpha2-source-check' && github.event.created == true && github.event.deleted == false && github.event.before == '0000000000000000000000000000000000000000' && github.run_attempt == '1' }}
+    if: ${{ github.repository == 'Liuoodh/deepseek-harness' && github.event_name == 'push' && github.ref == 'refs/heads/port/linux-alpha2-source-sandbox' && github.event.created == true && github.event.deleted == false && github.event.before == '0000000000000000000000000000000000000000' && github.run_attempt == '1' }}
     strategy:
       fail-fast: false
       matrix:
@@ -46,7 +46,7 @@ jobs:
         run: |
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -yq --no-install-recommends \
             build-essential binutils musl-tools pkg-config python3 \
-            dbus-x11 libasound2t64 libgbm1 libgtk-3-0t64 libnss3 libxss1 libxtst6 xauth xvfb
+            dbus-x11 libasound2t64 libgbm1 libgtk-3-0t64 libnss3 libxss1 libxtst6 unzip xauth xvfb
       - name: Install dependencies from frozen lockfile
         run: pnpm install --frozen-lockfile
       - name: Build repository artifacts
@@ -104,58 +104,6 @@ jobs:
           printf 'DSH_TEST_ELECTRON=%s\n' "$electron" >> "$GITHUB_ENV"
       - name: Exercise sandboxed Electron on Xvfb when supported by the runner
         run: |
-          (
-          smoke=$(mktemp -d "$RUNNER_TEMP/dsh-electron.XXXXXX")
-          trap 'rm -rf -- "$smoke"' EXIT
-          skip_smoke() {
-            printf '::warning::Electron UI smoke skipped: %s\n' "$1"
-            printf '%s\n' "- **Electron UI smoke skipped:** $1" >> "$GITHUB_STEP_SUMMARY"
-          }
-          if [[ ! -f apps/desktop/tests/platform-storage.e2e.ts || ! -f apps/desktop/tests/fixtures/platform-storage-smoke.mjs ]]; then
-            skip_smoke 'the Desktop storage harness is unavailable on this revision.'
-            exit 0
-          fi
-          if [[ ! -s apps/desktop/lib/types/platform-view.js ]]; then
-            printf '%s\n' '::error::The built Desktop Platform view is missing; build repository artifacts first.'
-            exit 1
-          fi
-          unset ELECTRON_RUN_AS_NODE ELECTRON_DISABLE_SANDBOX
-          electron=$DSH_TEST_ELECTRON
-          test -x "$electron"
-
-          # Check the Chromium sandbox can launch without changing app or host policy.
-          cat > "$smoke/preload.cjs" <<'JS'
-          require('electron').contextBridge.exposeInMainWorld('isSandboxed', process.sandboxed === true)
-          JS
-          cat > "$smoke/main.cjs" <<'JS'
-          const { app, BrowserWindow } = require('electron')
-          const { join } = require('node:path')
-          app.whenReady().then(async () => {
-            const window = new BrowserWindow({ show: false, webPreferences: {
-              preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false,
-            } })
-            await window.loadURL('data:text/html,<title>sandbox-check</title>')
-            if (await window.webContents.executeJavaScript('globalThis.isSandboxed') !== true) {
-              throw new Error('Electron renderer did not report an active sandbox')
-            }
-            app.exit(0)
-          }).catch(error => { console.error(error); app.exit(1) })
-          JS
-          status=0
-          timeout --kill-after=5s 45s xvfb-run -a "$electron" --user-data-dir="$smoke/profile" "$smoke/main.cjs" \
-            > "$smoke/launch.log" 2>&1 || status=$?
-          if (( status != 0 )); then
-            cat "$smoke/launch.log"
-            if grep -Eqi 'No usable sandbox|SUID sandbox helper binary was found, but is not configured correctly|Failed to move to new namespace: .*Operation not permitted' "$smoke/launch.log"; then
-              skip_smoke 'unchanged runner policy could not start the Chromium sandbox.'
-              exit 0
-            fi
-            exit "$status"
-          fi
-          xvfb-run -a pnpm exec vitest run --config vitest.e2e.config.ts \
-            apps/desktop/tests/platform-storage.e2e.ts | tee "$smoke/test.log"
-          grep -E 'Test Files[[:space:]]+1 passed \(1\)' "$smoke/test.log"
-          printf '%s\n' '- Electron UI: sandboxed renderer and Desktop storage smoke passed.' >> "$GITHUB_STEP_SUMMARY"
-          )
-          grep -Fx -- '- Electron UI: sandboxed renderer and Desktop storage smoke passed.' "$GITHUB_STEP_SUMMARY"
-          printf '%s\n' 'Alpha source verification passed; no installer was built.' >> "$GITHUB_STEP_SUMMARY"
+          bash apps/desktop/scripts/smoke-alpha2-electron-runner.sh "$TARGET_ARCH"
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
