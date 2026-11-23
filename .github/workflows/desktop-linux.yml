@@ -3,7 +3,7 @@ name: Desktop · Linux · Approved test build
 # This build-only branch is not merged into the port. The default-branch workflow remains manual.
 on:
   push:
-    branches: [port/linux-kylin-build-0.2.2-rc.5.20261118.1]
+    branches: [port/linux-kylin-build-0.2.2-rc.5.20261118.1-retry1]
 
 permissions:
   contents: read
@@ -14,7 +14,7 @@ jobs:
     if: >-
       github.event_name == 'push' &&
       github.repository == 'Liuoodh/deepseek-harness' &&
-      github.ref == 'refs/heads/port/linux-kylin-build-0.2.2-rc.5.20261118.1' &&
+      github.ref == 'refs/heads/port/linux-kylin-build-0.2.2-rc.5.20261118.1-retry1' &&
       github.event.created == true && github.event.deleted == false &&
       github.run_attempt == '1'
     strategy:
@@ -72,7 +72,7 @@ jobs:
           import { readFileSync } from 'node:fs'
           import { validateDesktopBuildVersion } from './apps/desktop/scripts/desktop-build-version.mjs'
           const version = process.env.BUILD_VERSION
-          const expectedRef = `refs/heads/port/linux-kylin-build-${version}`
+          const expectedRef = `refs/heads/port/linux-kylin-build-${version}-retry1`
           if (!version || !/^[0-9][0-9A-Za-z.-]*$/.test(version) || process.env.GITHUB_REF !== expectedRef) {
             throw new Error('The approved build version must match this build-only branch.')
           }
