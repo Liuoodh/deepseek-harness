@@ -66,3 +66,20 @@ test('bounded CLI distinguishes success, not seen yet, and bad file without echo
   await writeFile(input, Buffer.alloc(8 * 1024 * 1024 + 1))
   await assert.rejects(readWaylandTrace(input), /bounded regular client trace/u)
 })
+
+test('diagnostics summarize parsed and unsupported trace formats without publishing trace data', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-wayland-summary-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const input = join(directory, 'client.log')
+  const script = fileURLToPath(new URL('../scripts/read-dsh-wayland-welcome.mjs', import.meta.url))
+  const privateLine = 'wl_display#47.error(private-path)'
+  await writeFile(input, trace(...events, privateLine) + '\nEGL device initialization failed\nprivate-cookie')
+  const out = execFileSync(process.execPath, [script, '--summary', input], { encoding: 'utf8' })
+  assert.doesNotMatch(out, /private-path|private-cookie|EGL device/u)
+  assert.deepEqual(JSON.parse(out), {
+    protocolLookingLines: 9, recognizedLines: 8, surfaceRole: 1, toplevel: 1, title: 1,
+    configure: 1, ack: 1, attach: 1, commit: 2, welcomeTitle: 1, bufferedAttach: 1,
+    missingWaylandDisplay: false, missingXDisplay: false, ozoneInitFailure: false,
+    gbmOrEglIssue: true, gpuProcessIssue: false, displayProtocolError: true,
+  })
+})

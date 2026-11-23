@@ -110,13 +110,51 @@ export async function readWaylandTrace(path) {
   }
 }
 
+// Emit only fixed labels and counts, never text or identifiers from a client log.
+export function summarizeWaylandTrace(trace) {
+  const events = {
+    surfaceRole: 'xdg_wm_base.get_xdg_surface', toplevel: 'xdg_surface.get_toplevel',
+    title: 'xdg_toplevel.set_title', configure: 'xdg_surface.configure', ack: 'xdg_surface.ack_configure',
+    attach: 'wl_surface.attach', commit: 'wl_surface.commit',
+  }
+  const count = Object.fromEntries(Object.keys(events).map(key => [key, 0]))
+  let protocolLookingLines = 0
+  let recognizedLines = 0
+  let welcomeTitle = 0
+  let bufferedAttach = 0
+  for (const raw of trace.split(/\r?\n/u)) {
+    if (/\b(?:wl_display|wl_registry|wl_surface|xdg_wm_base|xdg_surface|xdg_toplevel)[@#]\d+\./u.test(raw)) protocolLookingLines++
+    const match = linePattern.exec(raw)
+    if (!match) continue
+    recognizedLines++
+    const [, , type, , method, args] = match
+    for (const [key, value] of Object.entries(events)) {
+      if (`${type}.${method}` === value) count[key]++
+    }
+    if (type === 'xdg_toplevel' && method === 'set_title' && args === '"DeepSeek Harness"') welcomeTitle++
+    if (type === 'wl_surface' && method === 'attach' && /^wl_buffer@[1-9]\d*,/u.test(args)) bufferedAttach++
+  }
+  return {
+    protocolLookingLines, recognizedLines, ...count, welcomeTitle, bufferedAttach,
+    missingWaylandDisplay: /failed to connect to (?:the |a )?wayland display/iu.test(trace),
+    missingXDisplay: /missing x server or \$display/iu.test(trace),
+    ozoneInitFailure: /the platform failed to initialize|failed to initialize ozone/iu.test(trace),
+    gbmOrEglIssue: /(?:egl|gbm)[^\r\n]{0,180}(?:failed|error)|(?:failed|error)[^\r\n]{0,180}(?:egl|gbm)/iu.test(trace),
+    gpuProcessIssue: /gpu process (?:is not usable|exited unexpectedly)|failed to launch gpu process/iu.test(trace),
+    displayProtocolError: /\bwl_display[@#]\d+\.error\(/u.test(trace),
+  }
+}
+
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (process.argv.length !== 3) {
-    console.error('Usage: node read-dsh-wayland-welcome.mjs CLIENT_TRACE')
+  const summary = process.argv.length === 4 && process.argv[2] === '--summary'
+  if (process.argv.length !== 3 && !summary) {
+    console.error('Usage: node read-dsh-wayland-welcome.mjs [--summary] CLIENT_TRACE')
     process.exitCode = 2
   } else {
     try {
-      if (findWelcomeBuffer(await readWaylandTrace(process.argv[2]))) console.log('Wayland welcome surface committed a buffer.')
+      const trace = await readWaylandTrace(process.argv[summary ? 3 : 2])
+      if (summary) console.log(JSON.stringify(summarizeWaylandTrace(trace)))
+      else if (findWelcomeBuffer(trace)) console.log('Wayland welcome surface committed a buffer.')
       else process.exitCode = 1
     } catch {
       console.error('Could not read a bounded Wayland client trace.')

@@ -1,9 +1,9 @@
-name: Desktop · Linux · ARM64 Wayland rc.5 verification
+name: Desktop · Linux · ARM64 Wayland rc.5 diagnosis
 
 # One-time verification of the already approved, built and verified artifact. No packaging or publication.
 on:
   push:
-    branches: [port/linux-kylin-wayland-rc5]
+    branches: [port/linux-kylin-wayland-rc5-diagnose]
     paths: [.github/workflows/desktop-linux-wayland-rc5.yml]
 
 permissions:
@@ -14,7 +14,7 @@ jobs:
   verify-installed-arm64-wayland:
     if: >-
       github.repository == 'Liuoodh/deepseek-harness' && github.event_name == 'push' &&
-      github.ref == 'refs/heads/port/linux-kylin-wayland-rc5' && github.event.created == true &&
+      github.ref == 'refs/heads/port/linux-kylin-wayland-rc5-diagnose' && github.event.created == true &&
       github.event.deleted == false && github.run_attempt == '1'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
@@ -70,11 +70,16 @@ jobs:
           fi
           touch -- "$RUNNER_TEMP/dsh-wayland-candidate/installation-attempted"
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -yq --no-install-recommends \
-            weston dbus-daemon "$RUNNER_TEMP/dsh-wayland-candidate/candidate.deb"
+            weston wayland-utils dbus-daemon "$RUNNER_TEMP/dsh-wayland-candidate/candidate.deb"
           test "$(dpkg-query -W -f='${Version}/${Architecture}' dsh-linux)" = '0.2.2~rc.5.20261118.1/arm64'
-      - name: Prove default native Wayland welcome
+      - name: Observe default native Wayland welcome
+        id: default-wayland
         timeout-minutes: 3
-        run: dbus-run-session -- bash apps/desktop/scripts/smoke-dsh-wayland-welcome.sh '/opt/DSH Linux/dsh-linux'
+        run: dbus-run-session -- bash apps/desktop/scripts/smoke-dsh-wayland-welcome.sh '/opt/DSH Linux/dsh-linux' default
+      - name: Diagnose explicit Wayland selection after default failure
+        if: failure() && steps.default-wayland.outcome == 'failure'
+        timeout-minutes: 3
+        run: dbus-run-session -- bash apps/desktop/scripts/smoke-dsh-wayland-welcome.sh '/opt/DSH Linux/dsh-linux' explicit
       - name: Purge the candidate test installation
         if: always()
         timeout-minutes: 3
