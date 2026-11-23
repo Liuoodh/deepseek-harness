@@ -35,6 +35,8 @@ pnpm --dir apps/desktop run package:linux:x64 --check
 
 Confirm the exact version before each packaging run and pass it as `--build-version`. Linux rejects `auto` and does not read official distribution settings. Outputs are `.deb` and `.rpm` under `apps/desktop/.desktop-build/targets/linux-<arch>/unsigned-artifacts/`. The manual [workflow](../../../.github/workflows/desktop-linux.yml) checks both package formats and their architectures, installs and removes the DEB on Ubuntu, and attaches the packages and checksums to the run. It neither publishes a release nor configures in-app updates. GitHub only accepts a manual dispatch once the workflow file is present on the fork's default branch; pushing only a candidate branch is not enough. Use the native-host packaging commands when the workflow has not been adopted on the default branch. Linux does not expose Desktop's global `dsh` command installer; the desktop Host still uses the bundled runtime.
 
+If Ubuntu setup fails in CI, check whether it stopped while refreshing APT indexes or while installing prerequisites. The workflow times out each step separately; do not treat either failure as a package build result.
+
 ## Maintain the fork against upstream
 
 Use `https://github.com/deepseek-ai/deepseek-harness.git` as the `upstream` fetch remote and commit the port to `port/linux-desktop`. Use a full checkout so Git has the history needed to find merge bases. Fetch upstream, review its proposed SHA and product version, then substitute the reviewed full SHA and name the candidate branch:

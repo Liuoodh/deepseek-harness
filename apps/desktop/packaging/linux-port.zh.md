@@ -35,6 +35,8 @@ pnpm --dir apps/desktop run package:linux:x64 --check
 
 每次实际打包需先确认精确版本，再传入 `--build-version`；Linux 不接受 `auto`，不会读官方分发配置。生成的 `.deb`、`.rpm` 位于 `apps/desktop/.desktop-build/targets/linux-<arch>/unsigned-artifacts/`。手动运行 [Linux Desktop 工作流](../../../.github/workflows/desktop-linux.yml) 会核对两种包的元数据和架构，并在 Ubuntu 安装、冒烟测试和卸载 DEB，再将包及校验值作为工作流附件留存。不是正式发布，也不会配置应用内更新。GitHub 仅在 fork 默认分支已有工作流文件时接收手动触发；只推送候选分支还不能启动手动构建。默认分支未引入工作流时，可使用原生主机打包命令。Linux 不提供 Desktop 的全局 `dsh` 命令安装菜单；桌面 Host 仍使用包内运行时。
 
+若 CI 的 Ubuntu 环境准备失败，先区分是刷新 APT 软件源索引，还是安装构建依赖。两个步骤分别设有超时；这两类失败都不是安装包构建结果。
+
 ## 长期更新
 
 将移植改动提交到 fork 的 `port/linux-desktop` 分支，`upstream` 获取地址使用 `https://github.com/deepseek-ai/deepseek-harness.git`。使用完整 Git 历史，以免遗漏合并基点。获取并审查上游提交和产品版本，把审查过的完整 SHA 和候选分支名填入下例：

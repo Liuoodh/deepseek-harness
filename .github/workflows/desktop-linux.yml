@@ -67,10 +67,14 @@ jobs:
         run: |
           node -e 'if (process.platform !== "linux" || process.arch !== process.env.TARGET_ARCH) throw Error("Expected native Linux " + process.env.TARGET_ARCH + ", got " + process.platform + "/" + process.arch)'
 
+      - name: Refresh Ubuntu package indexes
+        timeout-minutes: 6
+        run: sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -q --error-on=any
+
       - name: Install native build and Electron smoke prerequisites
+        timeout-minutes: 10
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -yq --no-install-recommends \
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -yq --no-install-recommends \
             build-essential binutils musl-tools pkg-config python3 \
             dbus-x11 libasound2t64 libgbm1 libgtk-3-0t64 libnss3 libxss1 libxtst6 xauth xvfb
 
