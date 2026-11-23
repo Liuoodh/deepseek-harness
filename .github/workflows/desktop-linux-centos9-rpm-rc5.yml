@@ -1,0 +1,120 @@
+name: Desktop · Linux · CentOS Stream 9 rc.5 RPM verification
+
+# Test the existing unsigned RPMs in native userspace containers. No new packaging or publication.
+on:
+  push:
+    branches: [port/linux-centos9-rpm-rc5]
+    paths: [.github/workflows/desktop-linux-centos9-rpm-rc5.yml]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify-rpm:
+    name: CentOS Stream 9 RPM (${{ matrix.arch }})
+    if: >-
+      github.repository == 'Liuoodh/deepseek-harness' && github.event_name == 'push' &&
+      github.ref == 'refs/heads/port/linux-centos9-rpm-rc5' && github.event.created == true &&
+      github.event.deleted == false && github.run_attempt == '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+            image: quay.io/centos/centos@sha256:12ba7b4abc2be2a2d8cb8363b6e13de9cb3f2a4ce66393514bdb47c1df59539c
+            artifact: 14837632443
+            artifact-name: desktop-linux-x64-unsigned
+            package-run: 45210819234
+            commit: 08102dff19d9fa4a671b80def7c8c62cec763c7c
+            size: 541648667
+            zip-sha: a53eebb20785dd4869de4b67322edc762dee0b27050786de608293112f480773
+            rpm-sha: 0050d235d2ba6e910e796038d7ab80b8892a622b6e73c34fa89274a728ed45e4
+          - arch: aarch64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            image: quay.io/centos/centos@sha256:caca017d5a8d999676187ceb67396f0611136438b30db7cd6cb2df265c4ecce7
+            artifact: 14818645053
+            artifact-name: desktop-linux-arm64-unsigned
+            package-run: 45169129600
+            commit: 19b9136b0391115bdb546c1a4b9b7bbf1ab58033
+            size: 512691117
+            zip-sha: 010af63fb6872bb6169bab2838b02949bd32f1afd41ee1830bfdcaca9690596b
+            rpm-sha: 0d03bef337b68103196a4520202edc051df3b6b2b49f7815fc3ef06550c7a0c4
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      RPM_ARCH: ${{ matrix.arch }}
+      RPM_SHA: ${{ matrix.rpm-sha }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check native runner and test script
+        run: |
+          test "$(uname -sm)" = "Linux $RPM_ARCH"
+          test -n "$RUNNER_TEMP"
+          bash -n apps/desktop/scripts/smoke-centos9-rpm-rc5.sh
+          mkdir -m 700 -- "$RUNNER_TEMP/dsh-centos9-rpm"
+      - name: Download and verify the pinned RPM
+        timeout-minutes: 7
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: ${{ matrix.artifact }}
+          ARTIFACT_NAME: ${{ matrix.artifact-name }}
+          PACKAGE_RUN: ${{ matrix.package-run }}
+          PACKAGE_COMMIT: ${{ matrix.commit }}
+          ZIP_SIZE: ${{ matrix.size }}
+          ZIP_SHA: ${{ matrix.zip-sha }}
+        run: |
+          cd -- "$RUNNER_TEMP/dsh-centos9-rpm"
+          endpoint=/repos/Liuoodh/deepseek-harness/actions/artifacts/$ARTIFACT
+          gh api "$endpoint" | jq -e --argjson id "$ARTIFACT" --arg name "$ARTIFACT_NAME" \
+            --argjson run "$PACKAGE_RUN" --arg commit "$PACKAGE_COMMIT" --argjson size "$ZIP_SIZE" --arg digest "sha256:$ZIP_SHA" '
+              .id == $id and .name == $name and .expired == false and .size_in_bytes == $size
+              and .workflow_run.id == $run and .workflow_run.head_sha == $commit and .digest == $digest
+            ' >/dev/null
+          timeout --kill-after=5s 300s gh api "$endpoint/zip" > candidate.zip
+          test "$(stat -c %s -- candidate.zip)" = "$ZIP_SIZE"
+          printf '%s  candidate.zip\n' "$ZIP_SHA" | sha256sum --check --strict
+          unzip -p candidate.zip "dsh-linux-0.2.2-rc.5.20261118.1-linux-$RPM_ARCH-unsigned.rpm" > candidate.rpm
+          printf '%s  candidate.rpm\n' "$RPM_SHA" | sha256sum --check --strict
+      - name: Start the pinned native CentOS container
+        timeout-minutes: 5
+        env:
+          IMAGE: ${{ matrix.image }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          dir=$RUNNER_TEMP/dsh-centos9-rpm
+          docker pull --platform "$PLATFORM" "$IMAGE"
+          docker create --pull never --platform "$PLATFORM" --cidfile "$dir/container.id" \
+            --mount "type=bind,source=$dir/candidate.rpm,target=/mnt/dsh-rpm/candidate.rpm,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/apps/desktop/scripts/smoke-centos9-rpm-rc5.sh,target=/mnt/dsh-rpm/check.sh,readonly" \
+            --entrypoint /usr/bin/sleep "$IMAGE" infinity
+          docker start "$(<"$dir/container.id")"
+      - name: Resolve dependencies and install using CentOS DNF
+        id: rpm-install
+        timeout-minutes: 8
+        run: docker exec "$(<"$RUNNER_TEMP/dsh-centos9-rpm/container.id")" /bin/bash /mnt/dsh-rpm/check.sh install "$RPM_ARCH" "$RPM_SHA"
+      - name: Check dynamic libraries and bundled non-root runtimes
+        timeout-minutes: 3
+        run: docker exec --user 65534:65534 "$(<"$RUNNER_TEMP/dsh-centos9-rpm/container.id")" /bin/bash /mnt/dsh-rpm/check.sh runtime "$RPM_ARCH" "$RPM_SHA"
+      - name: Remove the RPM and verify desktop registration cleanup
+        if: ${{ !cancelled() && steps.rpm-install.outcome == 'success' }}
+        timeout-minutes: 3
+        run: docker exec "$(<"$RUNNER_TEMP/dsh-centos9-rpm/container.id")" /bin/bash /mnt/dsh-rpm/check.sh remove "$RPM_ARCH" "$RPM_SHA"
+      - name: Remove the disposable container
+        if: always()
+        timeout-minutes: 2
+        run: |
+          cidfile=$RUNNER_TEMP/dsh-centos9-rpm/container.id
+          if [[ -s $cidfile ]]; then
+            cid=$(<"$cidfile")
+            [[ $cid =~ ^[a-f0-9]{64}$ ]]
+            docker rm --force "$cid"
+          fi
