@@ -1,18 +1,9 @@
-name: Desktop · Linux
+name: Desktop · Linux · Approved test build
 
+# This build-only branch is not merged into the port. The default-branch workflow remains manual.
 on:
-  pull_request:
-  workflow_dispatch:
-    inputs:
-      build_version:
-        description: Exact Desktop build version approved for this run (not auto)
-        type: string
-        required: true
-      confirm_version:
-        description: Confirm the entered version for unsigned Linux packages on both architectures
-        type: boolean
-        required: true
-        default: false
+  push:
+    branches: [port/linux-kylin-build-0.2.2-rc.5.20261118.1-retry6]
 
 permissions:
   contents: read
@@ -20,6 +11,12 @@ permissions:
 jobs:
   desktop-linux:
     name: Desktop Linux (${{ matrix.arch }})
+    if: >-
+      github.event_name == 'push' &&
+      github.repository == 'Liuoodh/deepseek-harness' &&
+      github.ref == 'refs/heads/port/linux-kylin-build-0.2.2-rc.5.20261118.1-retry6' &&
+      github.event.created == true && github.event.deleted == false &&
+      github.run_attempt == '1'
     strategy:
       fail-fast: false
       matrix:
@@ -28,10 +25,6 @@ jobs:
             arch: x64
             deb_arch: amd64
             rpm_arch: x86_64
-          - runner: ubuntu-24.04-arm
-            arch: arm64
-            deb_arch: arm64
-            rpm_arch: aarch64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     defaults:
@@ -40,19 +33,11 @@ jobs:
     env:
       DSH_TELEMETRY_DISABLED: '1'
       NO_COLOR: '1'
+      BUILD_VERSION: '0.2.2-rc.5.20261118.1'
     steps:
-      - name: Require manual version confirmation
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          CONFIRMED: ${{ inputs.confirm_version }}
-        run: |
-          if [[ "$CONFIRMED" != true ]]; then
-            echo '::error::Confirm the exact build version before requesting Linux packages.'
-            exit 1
-          fi
-
       - uses: actions/checkout@v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - uses: pnpm/action-setup@v5.0.0
@@ -81,17 +66,15 @@ jobs:
       - name: Install dependencies from frozen lockfile
         run: pnpm install --frozen-lockfile
 
-      - name: Validate exact build version against product manifests
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          BUILD_VERSION: ${{ inputs.build_version }}
+      - name: Validate approved build version against Git ref and product manifests
         run: |
           node --input-type=module <<'JS'
           import { readFileSync } from 'node:fs'
           import { validateDesktopBuildVersion } from './apps/desktop/scripts/desktop-build-version.mjs'
           const version = process.env.BUILD_VERSION
-          if (!version || !/^[0-9][0-9A-Za-z.-]*$/.test(version) || version.trim() !== version) {
-            throw new Error('Supply one exact SemVer build version, not auto or an empty value.')
+          const expectedRef = `refs/heads/port/linux-kylin-build-${version}-retry6`
+          if (!version || !/^[0-9][0-9A-Za-z.-]*$/.test(version) || process.env.GITHUB_REF !== expectedRef) {
+            throw new Error('The approved build version must match this build-only branch.')
           }
           const manifests = ['package.json', 'apps/cli/package.json', 'apps/desktop/package.json', 'apps/desktop-host/package.json']
           const versions = manifests.map(file => JSON.parse(readFileSync(file, 'utf8')).version)
@@ -221,15 +204,12 @@ jobs:
 
       # Neither PRs nor this dispatch publish to a release or an updater feed.
       - name: Install packaging and installed GUI verification tools
-        if: github.event_name == 'workflow_dispatch'
         run: sudo apt-get install -yq --no-install-recommends cpio dpkg-dev fakeroot rpm rpm2cpio xz-utils xdotool
 
       - name: Package approved unsigned Linux build
-        if: github.event_name == 'workflow_dispatch'
         id: package
         env:
           TARGET_ARCH: ${{ matrix.arch }}
-          BUILD_VERSION: ${{ inputs.build_version }}
         # Locked app-builder-lib 26.17.0 uses checksum-pinned FPM for native x64 and arm64.
         run: pnpm --dir apps/desktop run "package:linux:$TARGET_ARCH" --build-version "$BUILD_VERSION"
 
@@ -240,7 +220,6 @@ jobs:
           TARGET_ARCH: ${{ matrix.arch }}
           DEB_ARCH: ${{ matrix.deb_arch }}
           RPM_ARCH: ${{ matrix.rpm_arch }}
-          BUILD_VERSION: ${{ inputs.build_version }}
         run: |
           directory="apps/desktop/.desktop-build/targets/linux-$TARGET_ARCH/unsigned-artifacts"
           shopt -s nullglob
@@ -274,7 +253,6 @@ jobs:
         env:
           DSH_DESKTOP_TARGET_PLATFORM: linux
           DSH_DESKTOP_TARGET_ARCH: ${{ matrix.arch }}
-          BUILD_VERSION: ${{ inputs.build_version }}
         run: |
           directory="apps/desktop/.desktop-build/targets/linux-$DSH_DESKTOP_TARGET_ARCH/unsigned-artifacts"
           debs=("$directory"/*.deb)
