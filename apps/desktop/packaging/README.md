@@ -97,7 +97,7 @@ pnpm run package:desktop:mac:x64
 pnpm run package:desktop:win:x64
 ```
 
-The macOS arm64 command requires Apple Silicon. The macOS x64 command runs on Intel macOS or Apple Silicon with Rosetta. The Windows x64 command requires Windows x64. The fork-local [Linux desktop targets](linux-port.md) build unsigned candidates on native x64 and arm64 hosts, outside the official Desktop release workflow.
+The macOS arm64 command requires Apple Silicon. The macOS x64 command runs on Intel macOS or Apple Silicon with Rosetta. The Windows x64 command requires Windows x64. The fork's Linux desktop targets build unsigned candidates on native x64 and arm64 hosts, outside the official Desktop release workflow (guide: [English](linux-port.md) · [简体中文](linux-port.zh.md)).
 
 Both release and local unsigned macOS DMGs use LZMA compression (`dmg.format: 'ULMO'`) in [the electron-builder configuration](../scripts/electron-builder-config.mjs). A [build-time patch](../../../patches/app-builder-lib@26.17.0.patch) adds this format to the pinned builder's validation and TypeScript declarations.
 

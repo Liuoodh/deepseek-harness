@@ -2,7 +2,6 @@
 import { spawnSync } from 'node:child_process'
 
 const upstreamUrl = 'https://github.com/deepseek-ai/deepseek-harness.git'
-const portRef = 'refs/heads/port/linux-desktop'
 const upstreamRef = 'refs/remotes/upstream/master'
 const fullSha = /^[0-9a-f]{40}$/u
 
@@ -24,8 +23,11 @@ function ancestor(older, newer) {
   return true
 }
 
-function check(upstreamSha) {
+function check(upstreamSha, portRef) {
   if (!fullSha.test(upstreamSha)) throw new Error('Pass the reviewed upstream commit as a full 40-character lowercase SHA.')
+  if (!portRef.startsWith('refs/heads/port/') || git('check-ref-format', portRef).status !== 0) {
+    throw new Error('Pass an exact local maintenance branch ref under refs/heads/port/.')
+  }
   if (output(git('rev-parse', '--is-shallow-repository'), 'Run inside the fork checkout.') !== 'false') {
     throw new Error('Use a full Git checkout; shallow history can hide the merge base.')
   }
@@ -34,7 +36,7 @@ function check(upstreamSha) {
     throw new Error(`The upstream fetch remote must be ${upstreamUrl}.`)
   }
   const upstreamTip = output(git('rev-parse', '--verify', `${upstreamRef}^{commit}`), 'Fetch upstream master first.')
-  const portCommit = output(git('rev-parse', '--verify', `${portRef}^{commit}`), 'Commit the port to the local port/linux-desktop branch first.')
+  const portCommit = output(git('show-ref', '--verify', '--hash', portRef), `Create and commit the local maintenance branch ${portRef} first.`)
   if (output(git('cat-file', '-t', upstreamSha), 'The reviewed upstream commit is not available locally.') !== 'commit') {
     throw new Error('The reviewed SHA must identify a commit, not a tag or tree.')
   }
@@ -48,12 +50,12 @@ function check(upstreamSha) {
   }
   const mergeTree = output(result, 'Could not rehearse the upstream merge.').split(/\r?\n/u)[0]
   if (!fullSha.test(mergeTree)) throw new Error('Git did not report the merged tree SHA.')
-  return { portCommit, upstreamCommit: upstreamSha, upstreamTip, mergeTree }
+  return { portRef, portCommit, upstreamCommit: upstreamSha, upstreamTip, mergeTree }
 }
 
 try {
-  if (process.argv.length !== 3) throw new Error('Usage: node apps/desktop/scripts/check-linux-upstream.mjs <reviewed-upstream-sha>')
-  console.log(JSON.stringify(check(process.argv[2]), null, 2))
+  if (process.argv.length !== 4) throw new Error('Usage: node apps/desktop/scripts/check-linux-upstream.mjs <reviewed-upstream-sha> <refs/heads/port/maintenance-branch>')
+  console.log(JSON.stringify(check(process.argv[2], process.argv[3]), null, 2))
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error))
   process.exitCode = 1

@@ -2,7 +2,7 @@
 
 [简体中文](linux-port.zh.md)
 
-This is a community port, not an official DeepSeek Linux installer. It starts at `ca33fd6843b205e279c7ccb6cb73a472c78f5760` (`0.2.2-rc.4`), under the repository's MIT license and brand guidelines. Bundled third-party binaries retain their own licenses.
+This is a community port, not an official DeepSeek Linux installer. It follows the repository's MIT license and brand guidelines. Bundled third-party binaries retain their own licenses.
 
 ## Architecture and scope
 
@@ -39,14 +39,15 @@ If Ubuntu setup fails in CI, check whether it stopped while refreshing APT index
 
 ## Maintain the fork against upstream
 
-Use `https://github.com/deepseek-ai/deepseek-harness.git` as the `upstream` fetch remote and commit the port to `port/linux-desktop`. Use a full checkout so Git has the history needed to find merge bases. Fetch upstream, review its proposed SHA and product version, then substitute the reviewed full SHA and name the candidate branch:
+Use `https://github.com/deepseek-ai/deepseek-harness.git` as the `upstream` fetch remote and commit the port to a maintenance branch under `port/`. This fork uses `port/linux-kylin-arm64` for both Linux architectures. Use a full checkout so Git has the history needed to find merge bases. Fetch upstream, review its proposed SHA and product version, then substitute the reviewed full SHA and name the candidate branch:
 
 ```sh
 git fetch upstream refs/heads/master:refs/remotes/upstream/master
 git rev-parse upstream/master
 reviewed=REVIEWED_FULL_SHA
+port_ref=refs/heads/port/linux-kylin-arm64
 candidate=port/linux-candidate/example
-node apps/desktop/scripts/check-linux-upstream.mjs "$reviewed"
+node apps/desktop/scripts/check-linux-upstream.mjs "$reviewed" "$port_ref"
 ```
 
 The preflight tests committed trees, not uncommitted work. It records the port and upstream commits and the predicted merge tree without changing the checkout, index or refs. A conflict exits nonzero and lists affected files. For a clean result, start from a clean checkout and use the recorded port commit rather than relying on a branch that may have moved:

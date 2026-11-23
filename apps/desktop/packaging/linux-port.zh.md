@@ -2,7 +2,7 @@
 
 [English](linux-port.md)
 
-本分支是社区移植，不是 DeepSeek 官方 Linux 安装器。基线：`ca33fd6843b205e279c7ccb6cb73a472c78f5760`（`0.2.2-rc.4`）。源代码遵循仓库 MIT 许可证和品牌规范；第三方二进制仍遵循其各自许可。
+本分支是社区移植，不是 DeepSeek 官方 Linux 安装器。源代码遵循仓库 MIT 许可证和品牌规范；第三方二进制仍遵循其各自许可。
 
 ## 架构与改造范围
 
@@ -39,14 +39,15 @@ pnpm --dir apps/desktop run package:linux:x64 --check
 
 ## 长期更新
 
-将移植改动提交到 fork 的 `port/linux-desktop` 分支，`upstream` 获取地址使用 `https://github.com/deepseek-ai/deepseek-harness.git`。使用完整 Git 历史，以免遗漏合并基点。获取并审查上游提交和产品版本，把审查过的完整 SHA 和候选分支名填入下例：
+将移植改动提交到 fork 的 `port/` 维护分支。本 fork 用 `port/linux-kylin-arm64` 维护两种 Linux 架构，`upstream` 获取地址使用 `https://github.com/deepseek-ai/deepseek-harness.git`。使用完整 Git 历史，以免遗漏合并基点。获取并审查上游提交和产品版本，把审查过的完整 SHA 和候选分支名填入下例：
 
 ```sh
 git fetch upstream refs/heads/master:refs/remotes/upstream/master
 git rev-parse upstream/master
 reviewed=REVIEWED_FULL_SHA
+port_ref=refs/heads/port/linux-kylin-arm64
 candidate=port/linux-candidate/example
-node apps/desktop/scripts/check-linux-upstream.mjs "$reviewed"
+node apps/desktop/scripts/check-linux-upstream.mjs "$reviewed" "$port_ref"
 ```
 
 预检只检查已提交的内容，不包含未提交改动。它记录移植和上游提交及预计合并树，不改动检出文件、索引或引用；检测到冲突时返回非零并列出涉及文件。预检无冲突后，在干净的工作区从报告记录的移植提交建候选分支，不依赖可能已移动的分支名：

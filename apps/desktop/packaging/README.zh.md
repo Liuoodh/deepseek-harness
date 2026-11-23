@@ -97,7 +97,7 @@ pnpm run package:desktop:mac:x64
 pnpm run package:desktop:win:x64
 ```
 
-macOS arm64 命令要求 Apple Silicon。macOS x64 命令可以在 Intel macOS 或带 Rosetta 的 Apple Silicon 上运行。Windows x64 命令要求 Windows x64。fork 的 [Linux 桌面目标](linux-port.zh.md) 在 x64 和 arm64 原生宿主上构建未签名候选包，不走官方桌面发布流程。
+macOS arm64 命令要求 Apple Silicon。macOS x64 命令可以在 Intel macOS 或带 Rosetta 的 Apple Silicon 上运行。Windows x64 命令要求 Windows x64。fork 的 Linux 桌面目标在 x64 和 arm64 原生宿主上构建未签名候选包，不走官方桌面发布流程（指南：[English](linux-port.md) · [简体中文](linux-port.zh.md)）。
 
 macOS 正式发布和本地未签名 DMG 都通过 [electron-builder 配置](../scripts/electron-builder-config.mjs)中的 `dmg.format: 'ULMO'` 使用 LZMA 压缩。[构建时补丁](../../../patches/app-builder-lib@26.17.0.patch)为固定版本 builder 的校验规则和 TypeScript 声明添加此格式。
 

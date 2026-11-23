@@ -47,7 +47,9 @@ async function fixture(t) {
   return { root, base, port, incoming, conflict }
 }
 
-function check(root, sha) { return run(root, process.execPath, script, sha) }
+const fixturePortRef = 'refs/heads/port/linux-desktop'
+
+function check(root, sha, portRef = fixturePortRef) { return run(root, process.execPath, script, sha, portRef) }
 
 test('predicts the merge of the reviewed upstream commit, without touching the checkout or refs', async t => {
   const { root, port, incoming, conflict } = await fixture(t)
@@ -58,7 +60,7 @@ test('predicts the merge of the reviewed upstream commit, without touching the c
   const result = check(root, incoming)
   assert.equal(result.status, 0, result.stderr)
   const { mergeTree, ...commits } = JSON.parse(result.stdout)
-  assert.deepEqual(commits, { portCommit: port, upstreamCommit: incoming, upstreamTip: conflict })
+  assert.deepEqual(commits, { portRef: fixturePortRef, portCommit: port, upstreamCommit: incoming, upstreamTip: conflict })
   assert.equal(git(root, 'show-ref'), refs)
   assert.equal(git(root, 'status', '--short'), status)
   assert.equal(await readFile(dirtyFile, 'utf8'), 'uncommitted work\n')
@@ -66,6 +68,37 @@ test('predicts the merge of the reviewed upstream commit, without touching the c
   git(root, 'switch', '-qc', 'port/linux-candidate/fixture')
   git(root, 'merge', '--no-ff', '--no-edit', incoming)
   assert.equal(git(root, 'rev-parse', 'HEAD^{tree}'), mergeTree)
+})
+
+test('selects the exact maintenance ref even when a different port branch is checked out', async t => {
+  const { root, base, port, incoming } = await fixture(t)
+  const maintenanceRef = 'refs/heads/port/linux-kylin-arm64'
+  git(root, 'update-ref', maintenanceRef, base)
+  const result = check(root, incoming, maintenanceRef)
+  assert.equal(result.status, 0, result.stderr)
+  const report = JSON.parse(result.stdout)
+  assert.equal(report.portRef, maintenanceRef)
+  assert.equal(report.portCommit, base)
+  assert.equal(report.mergeTree, git(root, 'rev-parse', `${incoming}^{tree}`))
+  assert.equal(git(root, 'rev-parse', 'HEAD'), port)
+  assert.equal(git(root, 'status', '--short'), '')
+})
+
+test('requires an explicit exact local maintenance branch and never falls back', async t => {
+  const { root, incoming } = await fixture(t)
+  const omitted = run(root, process.execPath, script, incoming)
+  assert.equal(omitted.status, 1)
+  assert.match(omitted.stderr, /Usage:.*maintenance-branch/u)
+  for (const ref of ['port/linux-desktop', 'refs/remotes/origin/port/linux-desktop', 'refs/tags/port/linux-desktop', `${fixturePortRef}~1`]) {
+    const result = check(root, incoming, ref)
+    assert.equal(result.status, 1, ref)
+    assert.equal(result.stdout, '')
+    assert.match(result.stderr, /exact local maintenance branch/u)
+  }
+  const missing = check(root, incoming, 'refs/heads/port/missing')
+  assert.equal(missing.status, 1)
+  assert.equal(missing.stdout, '')
+  assert.match(missing.stderr, /Create and commit the local maintenance branch refs\/heads\/port\/missing/u)
 })
 
 test('reports real merge conflicts without creating a candidate or changing the port', async t => {
