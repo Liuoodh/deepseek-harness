@@ -125,7 +125,8 @@ jobs:
             apps/desktop/tests/platform-view.spec.ts \
             apps/desktop/tests/prepare-package-set.spec.ts \
             apps/desktop/tests/smoke-runtime.spec.ts \
-            packages/account/deepseek-account/tests/account.spec.ts
+            packages/account/deepseek-account/tests/account.spec.ts \
+            packages/document/office-kit/tests/engine-resolver.spec.ts
           node --test apps/desktop/tests/installed-linux-runtime.test.mjs apps/desktop/tests/linux-payload-report.test.mjs apps/desktop/tests/linux-sandbox-smoke.test.mjs apps/desktop/tests/linux-upstream-check.test.mjs
           bash -n apps/desktop/scripts/smoke-installed-linux-gui.sh
 
@@ -154,6 +155,16 @@ jobs:
           test -s apps/desktop-host/lib/index.js
           pnpm exec vitest run --config vitest.e2e.config.ts apps/desktop/tests/welcome-flow.e2e.ts
 
+      - name: Verify Office engine resolution in Electron's ASAR filesystem
+        run: |
+          unset ELECTRON_RUN_AS_NODE ELECTRON_NO_ASAR
+          # On a clean checkout the Electron module's lazy installer writes to stdout.
+          pnpm --filter @deepseek-ai/dsh-desktop exec install-electron
+          electron=$(node -p 'require("./apps/desktop/node_modules/electron")')
+          test -x "$electron"
+          node apps/desktop/tests/fixtures/office-asar-engine-smoke.mjs "$electron"
+          printf 'DSH_TEST_ELECTRON=%s\n' "$electron" >> "$GITHUB_ENV"
+
       - name: Exercise sandboxed Electron on Xvfb when supported by the runner
         run: |
           smoke=$(mktemp -d "$RUNNER_TEMP/dsh-electron.XXXXXX")
@@ -171,14 +182,8 @@ jobs:
             exit 1
           fi
           unset ELECTRON_RUN_AS_NODE ELECTRON_DISABLE_SANDBOX
-          # On a clean checkout the Electron module's lazy installer writes to stdout.
-          # Install first so the next command captures only the executable path.
-          pnpm --filter @deepseek-ai/dsh-desktop exec install-electron
-          electron=$(node -p 'require("./apps/desktop/node_modules/electron")')
-          if [[ ! -x "$electron" ]]; then
-            printf '::error::The installed Electron path is not executable: %q\n' "$electron"
-            exit 1
-          fi
+          electron=$DSH_TEST_ELECTRON
+          test -x "$electron"
 
           # Check the Chromium sandbox can launch without changing app or host policy.
           cat > "$smoke/preload.cjs" <<'JS'

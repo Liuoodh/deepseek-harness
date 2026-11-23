@@ -16,7 +16,8 @@ it('matches the consumer Kit installation for native and WASM engine manifests',
       throw error
     }
   }
-  for (const name of ['@deepseek-ai/libreoffice-kit-wasm', `@deepseek-ai/libreoffice-kit-${process.platform}-${process.arch}`]) {
+  const nativeSuffix = process.platform === 'linux' ? `linux-${process.arch}-glibc` : `${process.platform}-${process.arch}`
+  for (const name of ['@deepseek-ai/libreoffice-kit-wasm', `@deepseek-ai/libreoffice-kit-${nativeSuffix}`]) {
     const expected = outcome(name => fromKit.resolve(`${name}/package.json`), name)
     expect(outcome(resolveEnginePackage, name)).toBe(expected)
   }

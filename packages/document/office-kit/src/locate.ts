@@ -60,9 +60,17 @@ export function createEnginePackageResolver(kitEntry: string | URL): EnginePacka
       manifest = fromKit.resolve(`${name}/package.json`)
     } catch (error) {
       if (error instanceof Error && 'code' in error && error.code === 'MODULE_NOT_FOUND') {
-        const installed = (fromKit.resolve.paths(name) ?? []).some(directory =>
-          lstatSync(join(directory, name), { throwIfNoEntry: false }) !== undefined,
-        )
+        const installed = (fromKit.resolve.paths(name) ?? []).some(directory => {
+          // Electron ASAR and Node use different missing-entry sentinels in
+          // nonthrowing mode. Only ENOENT means the package path is absent.
+          try {
+            lstatSync(join(directory, name))
+            return true
+          } catch (inspectionError) {
+            if (inspectionError instanceof Error && 'code' in inspectionError && inspectionError.code === 'ENOENT') return false
+            throw inspectionError
+          }
+        })
         if (installed) throw new Error(`Installed LibreOfficeKit package is incomplete: ${name}. Reinstall the package.`, { cause: error })
       }
       throw error
