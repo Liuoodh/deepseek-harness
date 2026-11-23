@@ -1,9 +1,9 @@
-name: Desktop · Linux · ARM64 Wayland rc.5 diagnosis
+name: Desktop · Linux · ARM64 Wayland rc.5 trace verification
 
 # One-time verification of the already approved, built and verified artifact. No packaging or publication.
 on:
   push:
-    branches: [port/linux-kylin-wayland-rc5-diagnose]
+    branches: [port/linux-kylin-wayland-rc5-trace]
     paths: [.github/workflows/desktop-linux-wayland-rc5.yml]
 
 permissions:
@@ -14,7 +14,7 @@ jobs:
   verify-installed-arm64-wayland:
     if: >-
       github.repository == 'Liuoodh/deepseek-harness' && github.event_name == 'push' &&
-      github.ref == 'refs/heads/port/linux-kylin-wayland-rc5-diagnose' && github.event.created == true &&
+      github.ref == 'refs/heads/port/linux-kylin-wayland-rc5-trace' && github.event.created == true &&
       github.event.deleted == false && github.run_attempt == '1'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30

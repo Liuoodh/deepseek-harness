@@ -4,11 +4,18 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const maxTrace = 8 * 1024 * 1024
-const id = '(0|[1-9]\\d{0,9})'
-const linePattern = /^(?:\[\s*\d+\.\d+\])\s*(?:\{[^}\r\n]+\}\s*)?(?:(->)\s*)?(wl_surface|xdg_wm_base|xdg_surface|xdg_toplevel)@(\d+)\.(\w+)\(([^\r\n]*)\)\s*$/u
-const getSurface = new RegExp(`^new id xdg_surface@${id}, wl_surface@${id}$`, 'u')
-const getToplevel = new RegExp(`^new id xdg_toplevel@${id}$`, 'u')
-const attach = new RegExp(`^wl_buffer@${id}, -?\\d+, -?\\d+$`, 'u')
+const id = '(?:0|[1-9]\\d{0,9})'
+const linePattern = /^(?:\[\s*\d+\.\d+\])\s*(?:\{[^}\r\n]+\}\s*)?(?:(->)\s*)?(wl_surface|xdg_wm_base|xdg_surface|xdg_toplevel)(([@#])(?:0|[1-9]\d{0,9}))\.(\w+)\(([^\r\n]*)\)\s*$/u
+// Newer libwayland uses #. Include the separator in each object key so that
+// references never join events from the two different trace formats.
+const argumentsBySeparator = Object.fromEntries(['@', '#'].map(separator => {
+  const reference = `(${separator}${id})`
+  return [separator, {
+    getSurface: new RegExp(`^new id xdg_surface${reference}, wl_surface${reference}$`, 'u'),
+    getToplevel: new RegExp(`^new id xdg_toplevel${reference}$`, 'u'),
+    attach: new RegExp(`^wl_buffer${separator}[1-9]\\d{0,9}, -?\\d+, -?\\d+$`, 'u'),
+  }]
+}))
 const serial = /^\d{1,10}$/u
 
 /** Look for a configured welcome toplevel that commits an actual buffer on its own wl_surface. */
@@ -30,7 +37,8 @@ export function findWelcomeBuffer(trace, welcomeTitle = 'DeepSeek Harness') {
   for (const raw of trace.split(/\r?\n/u)) {
     const event = linePattern.exec(raw)
     if (!event) continue
-    const [, request, type, object, method, args] = event
+    const [, request, type, object, separator, method, args] = event
+    const { getSurface, getToplevel, attach } = argumentsBySeparator[separator]
     if (request && type === 'xdg_wm_base' && method === 'get_xdg_surface') {
       const ids = getSurface.exec(args)
       if (ids) {
@@ -75,8 +83,7 @@ export function findWelcomeBuffer(trace, welcomeTitle = 'DeepSeek Harness') {
       const state = roles.get(role)
       if (!state) continue
       if (method === 'attach') {
-        const buffer = attach.exec(args)
-        state.attached = Boolean(buffer && buffer[1] !== '0')
+        state.attached = attach.test(args)
       } else if (method === 'commit' && state.attached !== undefined) {
         if (state.attached && state.acked && state.titleMatches) presented = { role, surface: object }
         if (!state.attached && presented?.role === role) {
@@ -127,12 +134,12 @@ export function summarizeWaylandTrace(trace) {
     const match = linePattern.exec(raw)
     if (!match) continue
     recognizedLines++
-    const [, , type, , method, args] = match
+    const [, , type, , separator, method, args] = match
     for (const [key, value] of Object.entries(events)) {
       if (`${type}.${method}` === value) count[key]++
     }
     if (type === 'xdg_toplevel' && method === 'set_title' && args === '"DeepSeek Harness"') welcomeTitle++
-    if (type === 'wl_surface' && method === 'attach' && /^wl_buffer@[1-9]\d*,/u.test(args)) bufferedAttach++
+    if (type === 'wl_surface' && method === 'attach' && argumentsBySeparator[separator].attach.test(args)) bufferedAttach++
   }
   return {
     protocolLookingLines, recognizedLines, ...count, welcomeTitle, bufferedAttach,

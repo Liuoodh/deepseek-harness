@@ -48,6 +48,17 @@ function suiteForCoreTraces() {
   })
 }
 
+test('Wayland queue traces use # for all object references, without mixing formats', () => {
+  const modern = events.map(order => `{Default Queue}  ${order.replaceAll('@', '#')}`)
+  const beforeCommit = modern.slice(0, -1)
+  const pending = modern.slice(0, -2)
+  assert.equal(extract(modern), true)
+  assert.equal(extract([...beforeCommit, orders.commit]), false)
+  assert.equal(extract([...pending, orders.attach, modern.at(-1)]), false)
+  assert.equal(extract([...pending, modern.at(-2).replace('wl_buffer#36', 'wl_buffer@36'), modern.at(-1)]), false)
+  assert.equal(extract([...modern, '{Default Queue} -> wl_surface#33.attach(nil, 0, 0)', modern.at(-1)]), false)
+})
+
 test('bounded CLI distinguishes success, not seen yet, and bad file without echoing traces', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-wayland-trace-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
