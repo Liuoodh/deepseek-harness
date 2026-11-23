@@ -17,7 +17,7 @@
 |---|---|---|
 | Ubuntu 24.04 x64 / arm64 | 第一个构建与功能验收基线，源码已有 Linux 原生工具及运行时目标 | 各架构独立打包、安装、非 root 启动，核对 Electron、Host、Office 和原生工具执行；桌面窗口建立连接、发起并完成实际会话 |
 | CentOS Stream 9 x64 / arm64 | 候选；不把 RPM 格式或 Ubuntu 成功等同于支持 | 安装依赖及升级/卸载、ELF/GLIBC/GLIBCXX、X11/Wayland、Chromium/工具沙箱、真实工作区与插件验收 |
-| 用户提供的银河麒麟 ARM64 桌面（`5.4.96-49-kr9a0`） | **首验目标**；已观察到 `aarch64` 和 `KYLINOS` 内核标记，桌面产品版本、SP 和包格式待读回 | 先查目标机库和实际可用的工具沙箱，再验证普通用户安装与启动、中文输入、文件选择器和原有插件/Skill |
+| 银河麒麟桌面 V10 SP1 ARM64（`5.4.96-49-kr9a0`） | **首验目标**；实机预检：`dpkg` 架构为 `arm64`，Wayland，glibc 2.31，bubblewrap 0.4.0。先用 ARM64 DEB。 | 对比成品的 ELF 依赖并核对原生包依赖，再验证普通用户启动、Chromium 沙箱、DSH 工具沙箱、中文输入、文件选择器和原有插件/Skill |
 | 其他银河麒麟桌面 V10 x64 / arm64 | 候选；[V10 SP1 2503](https://www.kylinos.cn/upload/1/kycms/20250610/1932360363166240768.pdf) 是公开镜像参考，不代表截图中的设备 | 与 CentOS 相同的应用基线，外加麒麟的包管理、桌面及系统加固策略；每个已测 SP/架构单独记录 |
 | 银河麒麟桌面 V11 x64 / arm64 | 单独评估，不能继承 V10 的结果 | 先验证[应用隔离及磐石架构](https://www.kylinos.cn/about/news/1962451207332626434.html)下的安装格式、启动方式，以及 Chromium 与 DSH 工具沙箱能否保持可用 |
 | CentOS Linux 7 / 8 等旧版本 | 不承诺；旧发行版已结束维护，运行时 ABI 与内核能力也需单独评估 | 只有明确列出目标版本且安全运行时可维护，才另行评估；不为了安装降低系统或应用安全策略 |
@@ -33,7 +33,7 @@ pnpm --dir apps/desktop run package:linux:x64 --check
 # 在另一台 ARM64 构建机上改用 package:linux:arm64。
 ```
 
-每次实际打包需先确认精确版本，再传入 `--build-version`；Linux 不接受 `auto`，不会读官方分发配置。生成的 `.deb`、`.rpm` 位于 `apps/desktop/.desktop-build/targets/linux-<arch>/unsigned-artifacts/`。手动运行 [Linux Desktop 工作流](../../../.github/workflows/desktop-linux.yml) 会核对两种包的元数据和架构，并在 Ubuntu 安装、冒烟测试和卸载 DEB，再将包及校验值作为工作流附件留存。不是正式发布，也不会配置应用内更新。Linux 不提供 Desktop 的全局 `dsh` 命令安装菜单；桌面 Host 仍使用包内运行时。
+每次实际打包需先确认精确版本，再传入 `--build-version`；Linux 不接受 `auto`，不会读官方分发配置。生成的 `.deb`、`.rpm` 位于 `apps/desktop/.desktop-build/targets/linux-<arch>/unsigned-artifacts/`。手动运行 [Linux Desktop 工作流](../../../.github/workflows/desktop-linux.yml) 会核对两种包的元数据和架构，并在 Ubuntu 安装、冒烟测试和卸载 DEB，再将包及校验值作为工作流附件留存。不是正式发布，也不会配置应用内更新。GitHub 仅在 fork 默认分支已有工作流文件时接收手动触发；只推送候选分支还不能启动手动构建。默认分支未引入工作流时，可使用原生主机打包命令。Linux 不提供 Desktop 的全局 `dsh` 命令安装菜单；桌面 Host 仍使用包内运行时。
 
 ## 长期更新
 
@@ -76,6 +76,14 @@ if command -v bwrap >/dev/null 2>&1; then bwrap --version; else printf 'bwrap no
 Ubuntu 安装器冒烟测试以非 root 用户在独立的 X11 显示、D-Bus 会话和空白配置目录中执行已安装的启动器。保留 Chromium 沙箱，只在此进程确实显示首启欢迎窗口时通过。此项不验证登录、真实会话或 Wayland。
 
 手动工作流随包提供 `ELF-ABI.json`，列出 Ubuntu 安装 DEB 后、应用归档之外的目标架构 ELF 文件直接依赖的共享库（`DT_NEEDED`），以及 GLIBC、GLIBCXX、CXXABI 版本要求。`otherElf` 单列捆绑的其他架构预编译文件。此清单有助于在 CentOS Stream 和银河麒麟上预判 ABI 不匹配，但不验证归档内文件、间接依赖、系统内核或运行结果，不能替代目标机验收。已安装目录可用 `node apps/desktop/scripts/report-linux-payload.mjs --app-root '/opt/DSH Linux' --arch x64` 重采集，依赖 GNU `readelf`（`binutils`）；ARM64 改传 `arm64`。
+
+在首验麒麟机上安装 ARM64 DEB 前，可先在开发机把 CI 的成品清单与已观测的 glibc 版本对比；命令不会加载或执行候选安装包中的程序：
+
+```sh
+node apps/desktop/scripts/report-linux-payload.mjs --arch arm64 --report /path/to/ELF-ABI.json --target-glibc 2.31
+```
+
+存在需要更高 GLIBC 版本的文件，或存在无法按数字版本判断的 GLIBC ABI 名称时，该命令会列出文件和符号并返回非零。无异常也不等于通过验收：这一步不检测 `libstdc++`、依赖解析、Wayland 或沙箱。Ubuntu 的 X11 冒烟不能替代麒麟 Wayland 会话实测；应记录实际显示后端，并测试中文输入和目录选择器。
 
 工作流还随包提供构建阶段生成的 `desktop-runtime.json`，其 SHA-256 也列入 `SHA256SUMS`。在目标机先从可信工作流下载目录执行 `sha256sum -c SHA256SUMS` 并安装匹配的包。使用同一候选提交的开发 checkout，装好开发依赖并生成仓库构建产物后，可运行与 CI 相同的已安装 Host 冒烟，不需要在目标机自己重新打包：
 

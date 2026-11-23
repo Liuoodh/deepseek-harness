@@ -4,7 +4,7 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { readLinuxAbiRequirements, readLinuxNeededLibraries, reportLinuxPayload } from '../scripts/report-linux-payload.mjs'
+import { compareLinuxGlibc, readLinuxAbiRequirements, readLinuxNeededLibraries, reportLinuxPayload } from '../scripts/report-linux-payload.mjs'
 
 const machines = { x64: 62, arm64: 183 }
 
@@ -44,6 +44,28 @@ Dynamic section at offset 0x00000000 contains 6 entries:
  0x0000000000000000 (NULL)               0x0`
   assert.deepEqual(readLinuxNeededLibraries(output), ['libX11.so.6', 'libasound.so.2'])
   assert.deepEqual(readLinuxNeededLibraries('There is no dynamic section in this file.'), [])
+})
+
+test('compares GLIBC versions numerically and leaves named ABI imports unresolved', () => {
+  const elf = [
+    { file: 'dsh-linux', requires: ['GLIBC_2.9', 'GLIBC_2.31.0', 'GLIBC_2.31.1', 'GLIBCXX_3.4.99'] },
+    { file: 'binary.node', requires: ['GLIBC_2.34', 'GLIBC_ABI_DT_RELR', 'GLIBC_2.34'] },
+  ]
+  const report = { schemaVersion: 1, arch: 'arm64', scope: 'fixture', elf }
+  assert.deepEqual(compareLinuxGlibc(report, 'arm64', '2.31'), {
+    arch: 'arm64', targetGlibc: '2.31', scope: 'fixture', elfCount: 2,
+    aboveTarget: [{ file: 'dsh-linux', symbol: 'GLIBC_2.31.1' }, { file: 'binary.node', symbol: 'GLIBC_2.34' }],
+    unresolved: [{ file: 'binary.node', symbol: 'GLIBC_ABI_DT_RELR' }],
+  })
+  assert.deepEqual(compareLinuxGlibc({ ...report, elf: [elf[0]] }, 'arm64', '2.31.1').aboveTarget, [])
+})
+
+test('rejects a different architecture, an empty report, and invalid entries or target versions', () => {
+  const report = { schemaVersion: 1, arch: 'arm64', scope: 'fixture', elf: [{ file: 'test', requires: [] }] }
+  assert.throws(() => compareLinuxGlibc(report, 'x64', '2.31'), /nonempty ELF ABI report for Linux x64/u)
+  assert.throws(() => compareLinuxGlibc({ ...report, elf: [] }, 'arm64', '2.31'), /nonempty ELF ABI report/u)
+  assert.throws(() => compareLinuxGlibc({ ...report, elf: [{ file: 'test', requires: [5] }] }, 'arm64', '2.31'), /Invalid ELF ABI report entry/u)
+  assert.throws(() => compareLinuxGlibc(report, 'arm64', '2.x'), /numeric glibc version/u)
 })
 
 test('rejects a missing or wrong-architecture main executable', async () => {

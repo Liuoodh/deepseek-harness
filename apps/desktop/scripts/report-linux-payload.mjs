@@ -1,6 +1,6 @@
 /** Inventory the ELF files installed outside ASAR without loading the application. */
 import { execFileSync } from 'node:child_process'
-import { open, readdir, realpath } from 'node:fs/promises'
+import { open, readFile, readdir, realpath } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -93,10 +93,67 @@ export async function reportLinuxPayload(application, arch) {
   return { schemaVersion: 1, arch, scope: 'regular ELF files outside application archives', elf: elf.sort(byPath), otherElf: otherElf.sort(byPath) }
 }
 
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { values } = parseArgs({ options: { 'app-root': { type: 'string' }, arch: { type: 'string' } } })
-  if (!values['app-root'] || (values.arch !== 'x64' && values.arch !== 'arm64')) {
-    throw new Error('Usage: node report-linux-payload.mjs --app-root <directory> --arch <x64|arm64>')
+/** @param {string} version @returns {number[] | undefined} A numeric glibc version, or undefined for a named ABI. */
+function glibcVersion(version) {
+  if (!/^\d{1,6}\.\d{1,6}(?:\.\d{1,6})?$/u.test(version)) return undefined
+  return version.split('.').map(Number)
+}
+
+/**
+ * Compare numeric GLIBC imports to a target version and keep named imports unresolved.
+ * @param {unknown} report - An ELF report read from an independent build or input audit.
+ * @param {'x64' | 'arm64'} arch - Expected report architecture.
+ * @param {string} version - Target glibc as reported by getconf, with no prefix.
+ * @returns {{arch: string, targetGlibc: string, scope: string, elfCount: number, aboveTarget: {file: string, symbol: string}[], unresolved: {file: string, symbol: string}[]}} Static findings, not a loader or distro test.
+ */
+export function compareLinuxGlibc(report, arch, version) {
+  const target = glibcVersion(version)
+  if (!target) throw new Error('Expected a numeric glibc version, for example 2.31')
+  if (!report || typeof report !== 'object' || !('schemaVersion' in report) || report.schemaVersion !== 1
+    || !('arch' in report) || report.arch !== arch || !('scope' in report) || typeof report.scope !== 'string'
+    || !('elf' in report) || !Array.isArray(report.elf) || report.elf.length === 0) {
+    throw new Error(`Expected a nonempty ELF ABI report for Linux ${arch}`)
   }
-  console.log(JSON.stringify(await reportLinuxPayload(values['app-root'], values.arch), null, 2))
+  /** @type {{file: string, symbol: string}[]} */
+  const aboveTarget = []
+  /** @type {{file: string, symbol: string}[]} */
+  const unresolved = []
+  for (const entry of /** @type {unknown[]} */ (report.elf)) {
+    if (!entry || typeof entry !== 'object' || !('file' in entry) || typeof entry.file !== 'string'
+      || !('requires' in entry) || !Array.isArray(entry.requires)
+      || entry.requires.some((/** @type {unknown} */ symbol) => typeof symbol !== 'string')) {
+      throw new Error('Invalid ELF ABI report entry')
+    }
+    for (const symbol of new Set(/** @type {string[]} */ (entry.requires))) {
+      if (!symbol.startsWith('GLIBC_')) continue
+      const required = glibcVersion(symbol.slice('GLIBC_'.length))
+      if (!required) {
+        unresolved.push({ file: entry.file, symbol })
+        continue
+      }
+      for (let i = 0; i < 3; i++) {
+        const difference = (required[i] ?? 0) - (target[i] ?? 0)
+        if (difference > 0) aboveTarget.push({ file: entry.file, symbol })
+        if (difference !== 0) break
+      }
+    }
+  }
+  return { arch, targetGlibc: version, scope: report.scope, elfCount: report.elf.length, aboveTarget, unresolved }
+}
+
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const { values } = parseArgs({ options: {
+    'app-root': { type: 'string' }, arch: { type: 'string' }, report: { type: 'string' }, 'target-glibc': { type: 'string' },
+  } })
+  const arch = values.arch
+  if (arch !== 'x64' && arch !== 'arm64') throw new Error('Expected --arch <x64|arm64>')
+  if (values['app-root'] && values.report === undefined && values['target-glibc'] === undefined) {
+    console.log(JSON.stringify(await reportLinuxPayload(values['app-root'], arch), null, 2))
+  } else if (values['app-root'] === undefined && values.report && values['target-glibc']) {
+    const findings = compareLinuxGlibc(JSON.parse(await readFile(values.report, 'utf8')), arch, values['target-glibc'])
+    console.log(JSON.stringify(findings, null, 2))
+    if (findings.aboveTarget.length || findings.unresolved.length) process.exitCode = 1
+  } else {
+    throw new Error('Expected --app-root <directory> or --report <file> --target-glibc <version>')
+  }
 }

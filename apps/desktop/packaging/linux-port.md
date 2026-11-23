@@ -17,7 +17,7 @@ This is a community port, not an official DeepSeek Linux installer. It starts at
 |---|---|---|
 | Ubuntu 24.04 x64 and arm64 | First build and test baseline | Build, install, launch as a non-root user, verify Electron, Host, Office and native tools; run a real session from the Desktop UI on each architecture |
 | CentOS Stream 9 x64 and arm64 | Candidate, not qualified by an RPM header or an Ubuntu run | Install, upgrade and remove with native package tools; check ELF, GLIBC/GLIBCXX, X11/Wayland, Chromium and DSH sandbox, workspace and plugin behavior |
-| User's Kylin ARM64 desktop (`5.4.96-49-kr9a0`) | **First target for qualification**; `aarch64` and the `KYLINOS` kernel marker observed; desktop release, service pack, and package format pending | Check runtime libraries and the active tool sandbox first; then validate non-root install and launch, Chinese input, file picker, existing plugins and skills |
+| Kylin Desktop V10 SP1 ARM64 (`5.4.96-49-kr9a0`) | **First target for qualification**; target inventory shows `dpkg` architecture `arm64`, Wayland, glibc 2.31 and bubblewrap 0.4.0. Test the ARM64 DEB first. | Compare the built ELF report and native package dependencies, then verify non-root launch, Chromium and DSH tool sandboxes, Chinese input, directory picker, plugins and skills |
 | Other Kylin Desktop V10 x64 and arm64 images | Candidates; [V10 SP1 2503](https://www.kylinos.cn/upload/1/kycms/20250610/1932360363166240768.pdf) is a public reference image, not a claim about the photographed machine | Same checks as CentOS, plus Kylin package tooling, desktop behavior and system security policy; record each tested release and architecture separately |
 | Kylin Desktop V11 x64 and arm64 | Separate qualification target, not covered by V10 results | Check the accepted installation format, launch method, and verified operation of both Chromium and DSH sandboxes under the vendor's [application isolation and immutable system](https://www.kylinos.cn/about/news/1962451207332626434.html) |
 | End-of-life CentOS Linux 7 and 8 | Not a support target | Require a separate agreement on OS version and a maintainable runtime and security baseline |
@@ -33,7 +33,7 @@ pnpm --dir apps/desktop run package:linux:x64 --check
 # Use package:linux:arm64 on the separate ARM64 build host.
 ```
 
-Confirm the exact version before each packaging run and pass it as `--build-version`. Linux rejects `auto` and does not read official distribution settings. Outputs are `.deb` and `.rpm` under `apps/desktop/.desktop-build/targets/linux-<arch>/unsigned-artifacts/`. The manual [workflow](../../../.github/workflows/desktop-linux.yml) checks both package formats and their architectures, installs and removes the DEB on Ubuntu, and attaches the packages and checksums to the run. It neither publishes a release nor configures in-app updates. Linux does not expose Desktop's global `dsh` command installer; the desktop Host still uses the bundled runtime.
+Confirm the exact version before each packaging run and pass it as `--build-version`. Linux rejects `auto` and does not read official distribution settings. Outputs are `.deb` and `.rpm` under `apps/desktop/.desktop-build/targets/linux-<arch>/unsigned-artifacts/`. The manual [workflow](../../../.github/workflows/desktop-linux.yml) checks both package formats and their architectures, installs and removes the DEB on Ubuntu, and attaches the packages and checksums to the run. It neither publishes a release nor configures in-app updates. GitHub only accepts a manual dispatch once the workflow file is present on the fork's default branch; pushing only a candidate branch is not enough. Use the native-host packaging commands when the workflow has not been adopted on the default branch. Linux does not expose Desktop's global `dsh` command installer; the desktop Host still uses the bundled runtime.
 
 ## Maintain the fork against upstream
 
@@ -76,6 +76,14 @@ The package headers declare providers for Electron's ALSA, GBM, CUPS, udev, and 
 The Ubuntu installer smoke starts the installed launcher as a non-root user under a private X11 display, D-Bus session, and empty configuration. It requires a visible first-run welcome window from that process without disabling Chromium sandboxing. This checks installed startup, not sign-in, a real session, or Wayland.
 
 The manual workflow attaches an `ELF-ABI.json` report from the installed Ubuntu DEB. It lists direct shared-library imports (`DT_NEEDED`) and GLIBC, GLIBCXX, and CXXABI version requirements of target-architecture ELF files outside application archives. `otherElf` lists bundled prebuilds for other architectures separately. The report can identify ABI mismatches before testing CentOS Stream and Kylin, but does not verify archived files, transitive dependencies, kernel capabilities, or runtime behavior. To inspect an installation, run `node apps/desktop/scripts/report-linux-payload.mjs --app-root '/opt/DSH Linux' --arch x64` with GNU `readelf` (`binutils`) or pass `arm64` for that build.
+
+Before installing the ARM64 DEB on the first Kylin target, compare the workflow's report against the observed system glibc. Run this on a development machine; it does not load or run the candidate binaries:
+
+```sh
+node apps/desktop/scripts/report-linux-payload.mjs --arch arm64 --report /path/to/ELF-ABI.json --target-glibc 2.31
+```
+
+A nonzero result lists ELF files with newer versioned GLIBC imports, or unresolved nonnumeric GLIBC ABI names. Do not treat a result with no findings as qualification: it does not check `libstdc++`, dependency resolution, Wayland or sandbox operation. An X11 launch in Ubuntu CI does not count as a launch in the Kylin Wayland session. Check the selected display backend, Chinese input and the directory picker there.
 
 The workflow also attaches the preparation `desktop-runtime.json`, with its SHA-256 in `SHA256SUMS`. On a target machine, first check `sha256sum -c SHA256SUMS` from the trusted workflow download and install the matching package. With a development checkout of the same candidate and its dependencies and repository artifacts built, run the same installed Host smoke without running packaging on the target:
 
