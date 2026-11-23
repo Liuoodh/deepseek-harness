@@ -1,0 +1,161 @@
+name: Desktop · Linux Alpha source check
+on:
+  push:
+    branches:
+      - port/linux-alpha2-source-check
+permissions:
+  contents: read
+jobs:
+  alpha-source:
+    name: Alpha Linux source (${{ matrix.arch }})
+    if: ${{ github.repository == 'Liuoodh/deepseek-harness' && github.event_name == 'push' && github.ref == 'refs/heads/port/linux-alpha2-source-check' && github.event.created == true && github.event.deleted == false && github.event.before == '0000000000000000000000000000000000000000' && github.run_attempt == '1' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 55
+    defaults:
+      run:
+        shell: bash
+    env:
+      DSH_TELEMETRY_DISABLED: "1"
+      NO_COLOR: "1"
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v5.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24.22.3
+      - name: Assert native runner architecture
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          node -e 'if (process.platform !== "linux" || process.arch !== process.env.TARGET_ARCH) throw Error("Expected native Linux " + process.env.TARGET_ARCH + ", got " + process.platform + "/" + process.arch)'
+      - name: Refresh Ubuntu package indexes
+        timeout-minutes: 6
+        run: sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -q --error-on=any
+      - name: Install native build and Electron smoke prerequisites
+        timeout-minutes: 10
+        run: |
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -yq --no-install-recommends \
+            build-essential binutils musl-tools pkg-config python3 \
+            dbus-x11 libasound2t64 libgbm1 libgtk-3-0t64 libnss3 libxss1 libxtst6 xauth xvfb
+      - name: Install dependencies from frozen lockfile
+        run: pnpm install --frozen-lockfile
+      - name: Build repository artifacts
+        run: pnpm run build:artifacts
+      - name: Check aggregate types against built artifacts
+        run: pnpm run build:check
+      - name: Run focused Desktop tests
+        run: |
+          pnpm exec vitest run \
+            apps/desktop/tests/desktop-build-commit.spec.ts \
+            apps/desktop/tests/desktop-build-paths.spec.ts \
+            apps/desktop/tests/desktop-build-version.spec.ts \
+            apps/desktop/tests/desktop-package-environment.spec.ts \
+            apps/desktop/tests/linux-builder-config.spec.ts \
+            apps/desktop/tests/main-startup.spec.ts \
+            apps/desktop/tests/package-target.spec.ts \
+            apps/desktop/tests/package-target-stages.spec.ts \
+            apps/desktop/tests/platform-view.spec.ts \
+            apps/desktop/tests/prepare-package-set.spec.ts \
+            apps/desktop/tests/smoke-runtime.spec.ts \
+            packages/account/deepseek-account/tests/account.spec.ts \
+            packages/document/office-kit/tests/engine-resolver.spec.ts
+          node --test apps/desktop/tests/installed-linux-runtime.test.mjs apps/desktop/tests/linux-payload-report.test.mjs apps/desktop/tests/linux-sandbox-smoke.test.mjs apps/desktop/tests/linux-upstream-check.test.mjs
+          bash -n apps/desktop/scripts/smoke-installed-linux-gui.sh
+      - name: Check plugin compatibility and skill discovery
+        run: |
+          pnpm exec vitest run \
+            packages/boot/app-boot/tests/plugin-compatibility.spec.ts \
+            packages/boot/app-boot/tests/profile-plugins.spec.ts \
+            packages/skill/skill-filesystem/tests/skill-filesystem.spec.ts \
+            packages/skill/tool-skill/tests/tool-skill.spec.ts
+      - name: Build and exercise native DSH Landlock confinement
+        run: |
+          pnpm --dir native/system run build:ts
+          pnpm --dir native/system run build:native
+          node native/system/test/entry.test.js
+          pnpm exec vitest run --config vitest.e2e.config.ts \
+            packages/sandbox/sandbox-local/tests/landlock.e2e.ts \
+            packages/shell/bash-sandbox/tests/landlock.e2e.ts | tee "$RUNNER_TEMP/dsh-landlock.log"
+          # Existing suites can self-skip on an unusable kernel. A skip is not a pass on these native runners.
+          grep -E 'Test Files[[:space:]]+2 passed \(2\)' "$RUNNER_TEMP/dsh-landlock.log"
+          printf '%s\n' '- DSH Landlock: both real confinement suites passed.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Exercise the built Desktop Host account flow without credentials
+        run: |
+          test -s apps/desktop-host/lib/index.js
+          pnpm exec vitest run --config vitest.e2e.config.ts apps/desktop/tests/welcome-flow.e2e.ts
+      - name: Verify Office engine resolution in Electron's ASAR filesystem
+        run: |
+          unset ELECTRON_RUN_AS_NODE ELECTRON_NO_ASAR
+          # On a clean checkout the Electron module's lazy installer writes to stdout.
+          pnpm --filter @deepseek-ai/dsh-desktop exec install-electron
+          electron=$(node -p 'require("./apps/desktop/node_modules/electron")')
+          test -x "$electron"
+          node apps/desktop/tests/fixtures/office-asar-engine-smoke.mjs "$electron"
+          printf 'DSH_TEST_ELECTRON=%s\n' "$electron" >> "$GITHUB_ENV"
+      - name: Exercise sandboxed Electron on Xvfb when supported by the runner
+        run: |
+          (
+          smoke=$(mktemp -d "$RUNNER_TEMP/dsh-electron.XXXXXX")
+          trap 'rm -rf -- "$smoke"' EXIT
+          skip_smoke() {
+            printf '::warning::Electron UI smoke skipped: %s\n' "$1"
+            printf '%s\n' "- **Electron UI smoke skipped:** $1" >> "$GITHUB_STEP_SUMMARY"
+          }
+          if [[ ! -f apps/desktop/tests/platform-storage.e2e.ts || ! -f apps/desktop/tests/fixtures/platform-storage-smoke.mjs ]]; then
+            skip_smoke 'the Desktop storage harness is unavailable on this revision.'
+            exit 0
+          fi
+          if [[ ! -s apps/desktop/lib/types/platform-view.js ]]; then
+            printf '%s\n' '::error::The built Desktop Platform view is missing; build repository artifacts first.'
+            exit 1
+          fi
+          unset ELECTRON_RUN_AS_NODE ELECTRON_DISABLE_SANDBOX
+          electron=$DSH_TEST_ELECTRON
+          test -x "$electron"
+
+          # Check the Chromium sandbox can launch without changing app or host policy.
+          cat > "$smoke/preload.cjs" <<'JS'
+          require('electron').contextBridge.exposeInMainWorld('isSandboxed', process.sandboxed === true)
+          JS
+          cat > "$smoke/main.cjs" <<'JS'
+          const { app, BrowserWindow } = require('electron')
+          const { join } = require('node:path')
+          app.whenReady().then(async () => {
+            const window = new BrowserWindow({ show: false, webPreferences: {
+              preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false,
+            } })
+            await window.loadURL('data:text/html,<title>sandbox-check</title>')
+            if (await window.webContents.executeJavaScript('globalThis.isSandboxed') !== true) {
+              throw new Error('Electron renderer did not report an active sandbox')
+            }
+            app.exit(0)
+          }).catch(error => { console.error(error); app.exit(1) })
+          JS
+          status=0
+          timeout --kill-after=5s 45s xvfb-run -a "$electron" --user-data-dir="$smoke/profile" "$smoke/main.cjs" \
+            > "$smoke/launch.log" 2>&1 || status=$?
+          if (( status != 0 )); then
+            cat "$smoke/launch.log"
+            if grep -Eqi 'No usable sandbox|SUID sandbox helper binary was found, but is not configured correctly|Failed to move to new namespace: .*Operation not permitted' "$smoke/launch.log"; then
+              skip_smoke 'unchanged runner policy could not start the Chromium sandbox.'
+              exit 0
+            fi
+            exit "$status"
+          fi
+          xvfb-run -a pnpm exec vitest run --config vitest.e2e.config.ts \
+            apps/desktop/tests/platform-storage.e2e.ts | tee "$smoke/test.log"
+          grep -E 'Test Files[[:space:]]+1 passed \(1\)' "$smoke/test.log"
+          printf '%s\n' '- Electron UI: sandboxed renderer and Desktop storage smoke passed.' >> "$GITHUB_STEP_SUMMARY"
+          )
+          grep -Fx -- '- Electron UI: sandboxed renderer and Desktop storage smoke passed.' "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' 'Alpha source verification passed; no installer was built.' >> "$GITHUB_STEP_SUMMARY"
