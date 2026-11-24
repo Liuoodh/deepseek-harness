@@ -2,13 +2,13 @@ name: Desktop · Linux Alpha source check
 on:
   push:
     branches:
-      - port/linux-alpha2-source-sandbox
+      - port/linux-alpha2-source-sandbox-stage
 permissions:
   contents: read
 jobs:
   alpha-source:
     name: Alpha Linux source (${{ matrix.arch }})
-    if: ${{ github.repository == 'Liuoodh/deepseek-harness' && github.event_name == 'push' && github.ref == 'refs/heads/port/linux-alpha2-source-sandbox' && github.event.created == true && github.event.deleted == false && github.event.before == '0000000000000000000000000000000000000000' && github.run_attempt == '1' }}
+    if: ${{ github.repository == 'Liuoodh/deepseek-harness' && github.event_name == 'push' && github.ref == 'refs/heads/port/linux-alpha2-source-sandbox-stage' && github.event.created == true && github.event.deleted == false && github.event.before == '0000000000000000000000000000000000000000' && github.run_attempt == '1' }}
     strategy:
       fail-fast: false
       matrix:
